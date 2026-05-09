@@ -1,9 +1,9 @@
 import Stats from 'stats.js';
-import GUI from 'lil-gui';
+//import GUI from 'lil-gui';
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { EffectComposer, EffectPass, RenderPass, BrightnessContrastEffect, BloomEffect, VignetteEffect } from 'postprocessing';
-import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType, dyno } from '@sparkjsdev/spark';
+import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType } from '@sparkjsdev/spark';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 await RAPIER.init();
@@ -72,7 +72,7 @@ let playerModel: THREE.Object3D | null = null;
 let playerMixer: THREE.AnimationMixer | null = null;
 new GLTFLoader().load(
   playerAsset,
-  (gltf: GLTFLoader.LoadObject) => {
+  (gltf) => {
     playerModel = gltf.scene;
     playerMixer = new THREE.AnimationMixer(playerModel);
     const idleAnimation = playerMixer.clipAction(gltf.animations[0]);
@@ -84,7 +84,7 @@ new GLTFLoader().load(
     playerModel.renderOrder = 1;
   },
   undefined,
-  (err: Error) => {
+  (err) => {
     console.warn(`Could not load ${playerAsset}`, err);
   },
 );
@@ -200,7 +200,7 @@ let colliderModel: THREE.Object3D | null = null;
 let worldBody: RAPIER.RigidBody | null = null;
 new GLTFLoader().load(
   colliderAsset,
-  (gltf: GLTFLoader.LoadObject) => {
+  (gltf) => {
     colliderModel = gltf.scene;
     const { positions, indices } = mergeTrimesh(colliderModel);
     if (indices.length < 3) {
@@ -220,7 +220,7 @@ new GLTFLoader().load(
     }
   },
   undefined,
-  (err: Error) => {
+  (err) => {
     console.warn(`Could not load ${colliderAsset}`, err);
   },
 );
@@ -235,7 +235,7 @@ const handBody = rapierWorld.createRigidBody(handBodyDesc);
 const handGeometry = new THREE.SphereGeometry(0.01);
 const handMaterial = new THREE.MeshBasicMaterial( { color: 0xffffff } );
 const handModel = new THREE.Mesh(handGeometry, handMaterial);
-handModel.position.set(spawnPosition).add(handOffset);
+handModel.position.copy(spawnPosition).add(handOffset);
 scene.add(handModel);
 handModel.visible = false;
 
@@ -522,15 +522,17 @@ function animate( timestamp: DOMHighResTimeStamp ) {
     if (hit != null) {
       handModel.visible = true;
       const transmitterBody = hit.collider.parent();
-      const transmitterPosition = convertVector(transmitterBody.translation());
-      const transmitterOrientation = convertQuaternion(transmitterBody.rotation());
-      const offsetVector = new THREE.Vector3(0.0, 0.2, 0.0);
-      handModel.position.copy(transmitterPosition.clone().add(offsetVector.clone().applyQuaternion(transmitterOrientation)));
-      if (input.grabDrop) {
-        emptyHands = false;
-        handBody.setTranslation(handModel.position);
-        const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, offsetVector);
-        handJoint = rapierWorld.createImpulseJoint(jointData, handBody, transmitterBody, true);
+      if (transmitterBody) {
+        const transmitterPosition = convertVector(transmitterBody.translation());
+        const transmitterOrientation = convertQuaternion(transmitterBody.rotation());
+        const offsetVector = new THREE.Vector3(0.0, 0.2, 0.0);
+        handModel.position.copy(transmitterPosition.clone().add(offsetVector.clone().applyQuaternion(transmitterOrientation)));
+        if (input.grabDrop) {
+          emptyHands = false;
+          handBody.setTranslation(handModel.position, true);
+          const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, offsetVector);
+          handJoint = rapierWorld.createImpulseJoint(jointData, handBody, transmitterBody, true);
+        }
       }
     } else {
       handModel.visible = false;
@@ -539,8 +541,10 @@ function animate( timestamp: DOMHighResTimeStamp ) {
     if (input.grabDrop) {
       emptyHands = true;
       handModel.visible = false;
-      rapierWorld.removeImpulseJoint(handJoint, true);
-      handJoint = null;
+      if (handJoint) {
+        rapierWorld.removeImpulseJoint(handJoint, true);
+        handJoint = null;
+      }
     }
   }
   input.grabDrop = false;
