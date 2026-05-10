@@ -30,7 +30,7 @@ hintsEl.style.cssText = [
 hintsEl.innerHTML =
   'WASD &mdash; Move &nbsp;&nbsp; Shift &mdash; Sprint &nbsp;&nbsp; Space &mdash; Grab/Drop<br>' +
   'Click + drag &mdash; Orbit camera &nbsp;&nbsp; Scroll &mdash; Zoom<br>' +
-  'QE &mdash; Spin portal &nbsp;&nbsp; RF &mdash; Traverse portal';
+  'QE &mdash; Spin portal &nbsp;&nbsp; RF &mdash; Traverse portal &nbsp;&nbsp; T &mdash; Toggle twist';
 document.body.appendChild(hintsEl);
 
 // Setup stats
@@ -247,11 +247,12 @@ const sparkRenderer = new SparkRenderer({ renderer, enableLod: false, /*lodRende
 scene.add(sparkRenderer);
 
 //
-const portalOrientation = new THREE.Quaternion().identity();
+const portalOrientation = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3(0, 0, 1), -Math.PI/2);
 const referencePos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
 const referenceQuat = dyno.dynoVec4(new THREE.Vector4(1, 0, 0, 0));
 const phase = dyno.dynoFloat(0.0);
 const twisting = dyno.dynoFloat(0.0);
+const cameraPos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
 
 function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
   return dyno.dynoBlock(
@@ -259,7 +260,7 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
     { gsplat: dyno.Gsplat },
     ({ gsplat }) => {
       const d = new dyno.Dyno({
-        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", phase: "float", twisting: "float" },
+        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", phase: "float", twisting: "float", cameraPos: "vec3" },
         outTypes: { gsplat: dyno.Gsplat },
         globals: () => [dyno.unindent(`
           vec3 rotatePos(vec4 rot, vec3 pos) {
@@ -316,6 +317,10 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
           // --- Rotate Splat Position and Orientation ---
           ${outputs.gsplat}.center = rotatePos(${inputs.referenceQuat}, rotatePos(rotationQuat, splatPos)) * cosh(newRho) + ${inputs.referencePos};
           ${outputs.gsplat}.quaternion = rotateQuat(${inputs.referenceQuat}, rotateQuat(rotationQuat, rotateQuat(inverseRot, ${inputs.gsplat}.quaternion)));
+          // --- Cut a cone of player->camera occlusion ---
+          vec3 finalVec = normalize(${outputs.gsplat}.center - ${inputs.referencePos});
+          vec3 cameraVec = normalize(${inputs.cameraPos} - ${inputs.referencePos});
+          ${outputs.gsplat}.rgba.a *= step(dot(finalVec, cameraVec), 0.9);
         `),
       });
 
@@ -325,7 +330,8 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
         referenceQuat: referenceQuat,
         rgba: dyno.dynoConst("vec4", rgba),
         phase: dyno.sub(dyno.dynoConst("float", basePhase), phase),
-        twisting: twisting
+        twisting: twisting,
+        cameraPos: cameraPos,
       }).gsplat;
 
       return { gsplat };
@@ -551,6 +557,7 @@ const input = {
   spinRight: false,
   grabDrop: false,
   phaseShift: 0.0,
+  twist: false,
 };
 
 document.addEventListener('keydown', (event) => {
@@ -591,6 +598,11 @@ document.addEventListener('keydown', (event) => {
       event.preventDefault();
       if (!event.repeat && (input.phaseShift == 0)) {
         input.grabDrop = true;
+      }
+      break;
+    case 'KeyT':
+      if (!event.repeat) {
+        input.twist = !input.twist;
       }
       break;
   }
@@ -742,10 +754,11 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   input.grabDrop = false;
 
   // Update splat effect
-  //const rotationZ = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3(0, 0, 1), -Math.PI/2);
   const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight));
   referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
   referencePos.value.copy(playerPosition);
+  twisting.value = Number(input.twist);
+  cameraPos.value.copy(camera.position);
 
   //
   if (input.phaseShift != 0) {
