@@ -680,7 +680,7 @@ audioLoader.load('./force_field.wav', function(buffer) {
   psTrans.setMaxDistance(2);
   psTrans.setVolume(0.3);
 
-  testTransmitter.pivot.add(psTrans)
+  transmitters[0].pivot.add(psTrans)
 });
 
 // Setting up positional audios for kitchen bubbles
