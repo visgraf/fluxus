@@ -3,7 +3,7 @@ import Stats from 'stats.js';
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { EffectComposer, EffectPass, RenderPass, BrightnessContrastEffect, BloomEffect, VignetteEffect } from 'postprocessing';
-import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType } from '@sparkjsdev/spark';
+import { SparkRenderer, SplatMesh, dyno } from '@sparkjsdev/spark';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 await RAPIER.init();
@@ -13,10 +13,10 @@ function convertVector(v: RAPIER.Vector): THREE.Vector3 {
   return new THREE.Vector3(x, y, z);
 }
 
-function convertQuaternion(q: RAPIER.Quaternion): THREE.Quaternion {
+/*function convertQuaternion(q: RAPIER.Quaternion): THREE.Quaternion {
   const {w, x, y, z} = q;
   return new THREE.Quaternion(x, y, z, w);
-}
+}*/
 
 // Setup HUD
 const hintsEl = document.createElement('div');
@@ -60,7 +60,7 @@ directionalLight.target.position.set(0, 0, 0);
 const playerRadius = 0.1;
 const playerSpeed = 1.5;
 const sprintSpeed = 3.0;
-const rotationSpeed = 4.0;
+const rotationSpeed = 6.0;
 const spawnPosition = new THREE.Vector3(0, 1, 0);
 const playerPivot = new THREE.Group();
 scene.add(playerPivot);
@@ -134,7 +134,10 @@ const rapierWorld = new RAPIER.World(gravity);
 enum CollisionGroup {
   PLAYER = 1 << 0,
   WORLD = 1 << 1,
-  TRANSMITTER = 1 << 2,
+  RED = 1 << 2,
+  GREEN = 1 << 3,
+  BLUE = 1 << 4,
+  WHITE = (1 << 2) + (1 << 3) + (1 << 4),
   ALL = 0xFFFF
 };
 
@@ -195,7 +198,7 @@ function mergeTrimesh(root: THREE.Object3D): { positions: number[]; indices: num
 }
 
 // Setup world collider
-const colliderAsset = './collider.glb';
+const colliderAsset = './world_collider.glb';
 let colliderModel: THREE.Object3D | null = null;
 let worldBody: RAPIER.RigidBody | null = null;
 new GLTFLoader().load(
@@ -228,7 +231,7 @@ new GLTFLoader().load(
 // Setup hand
 const handOffset = new THREE.Vector3(0.0, -0.15, 0.0);
 const handSpeed = 4.0;
-let emptyHands = true;
+let heldTransmitter: Transmitter | null  = null;
 let handJoint: RAPIER.ImpulseJoint | null = null;
 const handBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased();
 const handBody = rapierWorld.createRigidBody(handBodyDesc);
@@ -239,46 +242,205 @@ handModel.position.copy(spawnPosition).add(handOffset);
 scene.add(handModel);
 handModel.visible = false;
 
+// Setup Spark
+const sparkRenderer = new SparkRenderer({ renderer, enableLod: false, /*lodRenderScale: 2*/ });
+scene.add(sparkRenderer);
+
+//
+const portalOrientation = new THREE.Quaternion().identity();
+const referencePos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
+const referenceQuat = dyno.dynoVec4(new THREE.Vector4(1, 0, 0, 0));
+const phase = dyno.dynoFloat(0.0);
+const twisting = dyno.dynoFloat(0.0);
+
+function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
+  return dyno.dynoBlock(
+    { gsplat: dyno.Gsplat },
+    { gsplat: dyno.Gsplat },
+    ({ gsplat }) => {
+      const d = new dyno.Dyno({
+        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", phase: "float", twisting: "float" },
+        outTypes: { gsplat: dyno.Gsplat },
+        globals: () => [dyno.unindent(`
+          vec3 rotatePos(vec4 rot, vec3 pos) {
+            vec3 rotatedPos = pos + cross(2.0 * rot.xyz, cross(rot.xyz, pos) + rot.w * pos);
+            return rotatedPos;
+          }
+
+          vec4 rotateQuat(vec4 rot, vec4 quat) {
+            vec4 rotatedQuat = rot.w * quat;
+            rotatedQuat.w = rotatedQuat.w - dot(rot.xyz, quat.xyz);
+            rotatedQuat.xyz = rotatedQuat.xyz + quat.w * rot.xyz + cross(rot.xyz, quat.xyz);
+            return rotatedQuat;
+          }
+        `)],
+        statements: ({ inputs, outputs }) => dyno.unindentLines(`
+          ${outputs.gsplat} = ${inputs.gsplat};
+          ${outputs.gsplat}.rgba *= ${inputs.rgba};
+          vec4 inverseRot = ${inputs.referenceQuat} * vec4(1.0, 1.0, 1.0, -1.0);
+          vec3 splatPos = rotatePos(inverseRot, ${inputs.gsplat}.center - ${inputs.referencePos});
+          vec3 splatRay = normalize(splatPos);
+          // --- Log-Polar Coordinates in the Riemann Sphere ---
+          float theta = atan(splatRay.y, splatRay.x);
+          float phi = asin(splatRay.z);
+          float rho = atanh(splatRay.z);
+          // --- Periodic Annulus ---
+          float lowerZ = -0.8;
+          float upperZ = 0.8;
+          float lowerRho = atanh(lowerZ);
+          float upperRho = atanh(upperZ);
+          float period = upperRho - lowerRho;
+          // --- Process Annulus Edges ---
+          float inside = step(lowerRho, rho) * step(rho, upperRho);
+          ${outputs.gsplat}.rgba.a *= inside;
+          float edgeThickness = 0.05;
+          float edge = step(rho, lowerRho + edgeThickness * 0.5) + step(upperRho - edgeThickness * 0.5, rho);
+          vec3 edgeColor = vec3(0.9, 0.7, 0.4);
+          ${outputs.gsplat}.rgba.rgb = mix(${outputs.gsplat}.rgba.rgb, edgeColor, edge);
+          // --- Phase Shift ---
+          rho += period * ${inputs.phase};
+          rho = mod((rho - lowerRho + period) / period, 3.0) * period + lowerRho - period;
+          // --- Log-Polar Rotation and Scale (Twisting) ---
+          float ratio = ${inputs.twisting} * period / (2.0 * PI);
+          float factor = 1.0 / (1.0 + ratio * ratio);
+          float newRho = (rho + theta * ratio) * factor;
+          float newTheta = (theta - rho * ratio) * factor;
+          // --- New Ray ---
+          float newZ = tanh(newRho);
+          float newPhi = asin(newZ);
+          vec3 newRay = vec3(vec2(cos(newTheta), sin(newTheta)) * cos(newPhi), newZ);
+          // --- Rotation Quaternion ---
+          vec3 crossRays = cross(splatRay, newRay);
+          float dotRays = dot(splatRay, newRay);
+          vec4 rotationQuat = normalize(vec4(crossRays, 1.0 + dotRays));
+          // --- Rotate Splat Position and Orientation ---
+          ${outputs.gsplat}.center = rotatePos(${inputs.referenceQuat}, rotatePos(rotationQuat, splatPos)) * cosh(newRho) + ${inputs.referencePos};
+          ${outputs.gsplat}.quaternion = rotateQuat(${inputs.referenceQuat}, rotateQuat(rotationQuat, rotateQuat(inverseRot, ${inputs.gsplat}.quaternion)));
+        `),
+      });
+
+      gsplat = d.apply({
+        gsplat,
+        referencePos: referencePos,
+        referenceQuat: referenceQuat,
+        rgba: dyno.dynoConst("vec4", rgba),
+        phase: dyno.sub(dyno.dynoConst("float", basePhase), phase),
+        twisting: twisting
+      }).gsplat;
+
+      return { gsplat };
+    },
+  );
+}
+
+
+
+//
 class Transmitter {
-  model: THREE.Object3D;
+  pivot: THREE.Group;
+  model: SplatMesh;
   collider: RAPIER.Collider;
+  body: RAPIER.RigidBody;
+  tipOffset: THREE.Vector3;
+  tip: THREE.Group;
  
-  constructor(x:number, y: number, z: number) {
-    const radius = 0.2;
-    const height = 0.4;
+  constructor(x:number, y: number, z: number, asset: string, basePhase: number, collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
+    const radius = 0.18;
+    const height = 0.45;
 
     const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z);
     rigidBodyDesc.setLinearDamping(1.0);   // slows swinging back and forth
     rigidBodyDesc.setAngularDamping(2.0);  // slows spinning / rotation
-    const rigidBody = rapierWorld.createRigidBody(rigidBodyDesc);
+    this.body = rapierWorld.createRigidBody(rigidBodyDesc);
+    this.body.userData = this;
 
     const colliderDesc = RAPIER.ColliderDesc.cone(height/2, radius);
-    colliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.TRANSMITTER, CollisionGroup.ALL));
-    this.collider = rapierWorld.createCollider(colliderDesc, rigidBody);
+    colliderDesc.setCollisionGroups(createGroupMask(collisionGroup, CollisionGroup.ALL - CollisionGroup.WHITE + collisionGroup));
+    this.collider = rapierWorld.createCollider(colliderDesc, this.body);
 
-    const geometry = new THREE.ConeGeometry(radius, height);
-    const material = new THREE.MeshBasicMaterial( { color: 0xff5500 } );
-    this.model = new THREE.Mesh(geometry, material );
-    scene.add(this.model);
+    this.pivot = new THREE.Group();
+    scene.add(this.pivot);
+
+    this.tipOffset = new THREE.Vector3(0.0, height/2, 0.0);
+    this.tip = new THREE.Group();
+    this.tip.position.copy(this.tipOffset);
+    this.pivot.add(this.tip);
+
+    this.model = new SplatMesh({ url: asset, lod: false });
+    this.model.quaternion.identity();
+    this.model.scale.setScalar(0.14);
+    this.model.position.set(0, -0.3, 0);
+    this.pivot.add(this.model);
+
+    this.model.worldModifier = createSplatEffect(basePhase, rgba);
+    this.model.updateGenerator();
   }
 
   updatePosition(): void {
     const {x, y, z} = this.collider.translation();
-    this.model.position.set(x, y, z);
+    this.pivot.position.set(x, y, z);
   }
 
   updateOrientation(): void {
     const {w, x, y, z} = this.collider.rotation();
-    this.model.quaternion.set(x, y, z, w);
+    this.pivot.quaternion.set(x, y, z, w);
   }
 
   updatePose(): void {
     this.updatePosition();
     this.updateOrientation();
   }
+
+  getTip(): THREE.Vector3 {
+    const tipPosition = new THREE.Vector3();
+    return this.tip.getWorldPosition(tipPosition);
+  }
 }
 
-const testTransmitter = new Transmitter(0.5, 0.5, 0.0);
+class Receiver {
+  model: SplatMesh;
+
+  constructor(x:number, y: number, z: number, angle: number, asset: string, basePhase: number, rgba: THREE.Vector4) {
+    this.model = new SplatMesh({ url: asset, lod: false });
+    this.model.quaternion.setFromAxisAngle( new THREE.Vector3(0, 1, 0), angle);
+    this.model.scale.setScalar(0.14);
+    this.model.position.set(x, y, z);
+    scene.add(this.model);
+
+    this.model.worldModifier = createSplatEffect(basePhase, rgba);
+    this.model.updateGenerator();
+  }
+}
+
+//
+const testTransmitter = new Transmitter(
+  0.5, 0.5, 0.0,
+  './transmitter.spz', 0.0,
+  CollisionGroup.RED,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+
+const testTransmitter2 = new Transmitter(
+  0.5, 0.5, 0.0,
+  './transmitter.spz', 1.0,
+  CollisionGroup.GREEN,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+
+const testReceiver = new Receiver(
+  0.75, 1.0, 1.15, Math.PI,
+  './receiver.spz', 0.0,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+
+const testReceiver2 = new Receiver(
+  -1.35, 1.0, -2.0, Math.PI/2,
+  './receiver.spz', 0.0,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+
+console.log(testReceiver.model);
+console.log(testReceiver2.model);
 
 //
 rapierWorld.updateSceneQueries();
@@ -293,7 +455,7 @@ const rapierDebugLines = new THREE.LineSegments(
   rapierDebugGeom,
   new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false }),
 );
-rapierDebugLines.visible = true;
+rapierDebugLines.visible = false;
 scene.add(rapierDebugLines);
 
 function updateRapierDebugLines() {
@@ -314,36 +476,69 @@ function updateRapierDebugLines() {
   rapierDebugGeom.getAttribute('color').needsUpdate = true;
 }
 
-// Setup Spark
-const sparkRenderer = new SparkRenderer({ renderer, enableLod: false, /*lodRenderScale: 2*/ });
-scene.add(sparkRenderer);
+class ParallelWorld {
+  basePhase: number;
+  model: SplatMesh;
+  transmitters: Transmitter[];
+  receivers: Receiver[];
 
-// Setup player occlusion effect
-const occlusionEdit = new SplatEdit();
-scene.add(occlusionEdit);
-const occlusionShape = new SplatEditSdf({
-  type: SplatEditSdfType.INFINITE_CONE,
-  opacity: 0,
-  radius: 0.5
-});
-occlusionEdit.add(occlusionShape);
-occlusionEdit.position.copy(spawnPosition);
+  collisionGroup: CollisionGroup;
 
-//
-const WORLD_ASSETS = {
-  original: './original.spz',
-  overgrown: './overgrown.spz',
-  frozen: './friozen.spz',
-  collider: './collider.glb',
-} as const;
+  left: ParallelWorld;
+  right: ParallelWorld;
 
-//
-const originalSplat = new SplatMesh({ url: WORLD_ASSETS.original, lod: false });
-originalSplat.quaternion.identity();
-originalSplat.position.set(0, 0, 0);
-scene.add(originalSplat);
-originalSplat.updateGenerator();
-originalSplat.updateVersion();
+  constructor(asset: string, basePhase: number, collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
+    this.basePhase = basePhase;
+    this.collisionGroup = collisionGroup
+
+    this.model = new SplatMesh({ url: asset, lod: false });
+    this.model.quaternion.identity();
+    this.model.position.set(0, 0, 0);
+    scene.add(this.model);
+    this.model.updateGenerator();
+    this.model.updateVersion();
+
+    this.model.worldModifier = createSplatEffect(basePhase, rgba);
+    this.model.updateGenerator();
+
+    this.transmitters = [];
+    this.receivers = [];
+
+    this.left = this;
+    this.right = this;
+  }
+
+  setNeighbors(left: ParallelWorld, right: ParallelWorld) {
+    this.left = left;
+    this.right = right;
+  }
+}
+
+const worldRed = new ParallelWorld(
+  './world_red.spz', 0.0,
+  CollisionGroup.RED,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+
+const worldGreen = new ParallelWorld(
+  './world_green.spz', 1.0,
+  CollisionGroup.GREEN,
+  new THREE.Vector4(0.3, 1.0, 0.3, 1.0)
+);
+
+const worldBlue = new ParallelWorld(
+  './world_blue.spz', 2.0,
+  CollisionGroup.BLUE,
+  new THREE.Vector4(0.3, 0.3, 1.0, 1.0)
+);
+
+worldRed.setNeighbors(worldBlue, worldGreen);
+worldGreen.setNeighbors(worldRed, worldBlue);
+worldBlue.setNeighbors(worldGreen, worldRed);
+
+let currentWorld: ParallelWorld = worldRed;
+
+
 
 // Setup inputs
 const input = {
@@ -354,9 +549,8 @@ const input = {
   sprint: false,
   spinLeft: false,
   spinRight: false,
-  portalForward: false,
-  portalBackwards: false,
   grabDrop: false,
+  phaseShift: 0.0,
 };
 
 document.addEventListener('keydown', (event) => {
@@ -384,14 +578,18 @@ document.addEventListener('keydown', (event) => {
       input.spinRight = true;
       break;
     case 'KeyR':
-      input.portalForward = true;
+      if ((heldTransmitter == null) && (input.phaseShift == 0)) {
+        input.phaseShift = 1;
+      }
       break;
     case 'KeyF':
-      input.portalBackwards = true;
+      if ((heldTransmitter == null) && (input.phaseShift == 0)) {
+        input.phaseShift = -1;
+      }
       break;
     case 'Space':
       event.preventDefault();
-      if (!event.repeat) {
+      if (!event.repeat && (input.phaseShift == 0)) {
         input.grabDrop = true;
       }
       break;
@@ -421,12 +619,6 @@ document.addEventListener('keyup', (event) => {
       break;
     case 'KeyE':
       input.spinRight = false;
-      break;
-    case 'KeyR':
-      input.portalForward = false;
-      break;
-    case 'KeyF':
-      input.portalBackwards = false;
       break;
   }
 });
@@ -507,30 +699,29 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   // Update animation mixer
   playerMixer?.update(deltaTime);
 
-  // Update player occlusion effect
-  occlusionEdit.position.copy(playerPosition);
-  occlusionEdit.rotation.set(0, Math.PI, 0);
-  occlusionEdit.applyQuaternion(cameraOrientation);
-
   //
   testTransmitter.updatePose();
+  testTransmitter2.updatePose();
+
+  // DEBUG
+  if (input.grabDrop) {
+    console.log(playerPosition);
+  }
 
   // Update grab and drop actions
-  if (emptyHands) {
+  if (heldTransmitter == null) {
     const ray = new RAPIER.Ray(playerPosition, new RAPIER.Vector3(0, -1, 0));
-    const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.TRANSMITTER));
+    const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, currentWorld.collisionGroup));
     if (hit != null) {
       handModel.visible = true;
       const transmitterBody = hit.collider.parent();
-      if (transmitterBody) {
-        const transmitterPosition = convertVector(transmitterBody.translation());
-        const transmitterOrientation = convertQuaternion(transmitterBody.rotation());
-        const offsetVector = new THREE.Vector3(0.0, 0.2, 0.0);
-        handModel.position.copy(transmitterPosition.clone().add(offsetVector.clone().applyQuaternion(transmitterOrientation)));
+      if (transmitterBody != null) {
+        const transmitter = transmitterBody.userData as Transmitter;
+        handModel.position.copy(transmitter.getTip());
         if (input.grabDrop) {
-          emptyHands = false;
+          heldTransmitter = transmitter;
           handBody.setTranslation(handModel.position, true);
-          const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, offsetVector);
+          const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, transmitter.tipOffset);
           handJoint = rapierWorld.createImpulseJoint(jointData, handBody, transmitterBody, true);
         }
       }
@@ -538,16 +729,56 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       handModel.visible = false;
     }
   } else {
+    heldTransmitter.body.wakeUp();
     if (input.grabDrop) {
-      emptyHands = true;
+      heldTransmitter = null;
       handModel.visible = false;
-      if (handJoint) {
+      if (handJoint != null) {
         rapierWorld.removeImpulseJoint(handJoint, true);
         handJoint = null;
       }
     }
   }
   input.grabDrop = false;
+
+  // Update splat effect
+  //const rotationZ = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3(0, 0, 1), -Math.PI/2);
+  const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight));
+  referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
+  referencePos.value.copy(playerPosition);
+
+  //
+  if (input.phaseShift != 0) {
+    handModel.visible = false;
+  }
+  let newPhase = phase.value + deltaTime * input.phaseShift;
+  if ((phase.value < -1.0 && -1.0 <= newPhase) || (newPhase <= -1.0 && -1.0 < phase.value)) {
+    currentWorld = worldBlue;
+    phase.value = 2.0;
+    input.phaseShift = 0;
+  } else if ((phase.value < 0.0 && 0.0 <= newPhase) || (newPhase <= 0.0 && 0.0 < phase.value)) {
+    currentWorld = worldRed;
+    phase.value = 0.0;
+    input.phaseShift = 0;
+  } else if ((phase.value < 1.0 && 1.0 <= newPhase) || (newPhase <= 1.0 && 1.0 < phase.value)) {
+    currentWorld = worldGreen;
+    phase.value = 1.0;
+    input.phaseShift = 0;
+  } else if ((phase.value < 2.0 && 2.0 <= newPhase) || (newPhase <= 2.0 && 2.0 < phase.value)) {
+    currentWorld = worldBlue;
+    phase.value = 2.0;
+    input.phaseShift = 0;
+  } else if ((phase.value < 3.0 && 3.0 <= newPhase) || (newPhase <= 3.0 && 3.0 < phase.value)) {
+    currentWorld = worldRed;
+    phase.value = 0.0;
+    input.phaseShift = 0;
+  } else {
+    phase.value = newPhase;
+  }
+
+  worldRed.model.updateVersion();
+  worldGreen.model.updateVersion();
+  worldBlue.model.updateVersion();
   
   // Render scene
   composer.render(deltaTime);
