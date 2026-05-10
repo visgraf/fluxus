@@ -646,7 +646,61 @@ worldBlue.setNeighbors(worldGreen, worldRed);
 
 let currentWorld: ParallelWorld = worldRed;
 
+// Connecting listener to the scene so we can use character position and camera
+// orientation
+const listener = new THREE.AudioListener();
+scene.add(listener);
 
+// Setting up background sound and Cornellius sound (neither positional)
+const cornelliusSound = new THREE.Audio(listener);
+const audioLoader = new THREE.AudioLoader();
+audioLoader.load('./cornelius_intro.mp3', function(buffer) {
+  cornelliusSound.setBuffer(buffer);
+  cornelliusSound.setLoop(false);
+  cornelliusSound.setVolume(0.7);
+});
+
+const bgSound = new THREE.Audio(listener);
+audioLoader.load('./soundtrack_edited.wav', function(buffer) {
+  bgSound.setBuffer(buffer);
+  bgSound.setLoop(true);
+  bgSound.setVolume(0.3);
+});
+
+// Setting up positional audios for force fields
+const positionalSounds: THREE.PositionalAudio[] = [];
+const psTrans = new THREE.PositionalAudio(listener);
+positionalSounds.push(psTrans);
+
+audioLoader.load('./force_field.wav', function(buffer) {
+  psTrans.setBuffer(buffer);
+  psTrans.setLoop(true);  
+  psTrans.setRefDistance(1);
+  psTrans.setDistanceModel('linear');
+  psTrans.setMaxDistance(2);
+  psTrans.setVolume(0.3);
+
+  testTransmitter.pivot.add(psTrans)
+});
+
+// Setting up positional audios for kitchen bubbles
+const cauldron = new THREE.Object3D();
+cauldron.position.set(-5.26, 0.8, 5.78);
+scene.add(cauldron);
+
+const psKitchen = new THREE.PositionalAudio(listener);
+positionalSounds.push(psKitchen);
+
+audioLoader.load('./multiple_potions_bubbles.wav', function(buffer) {
+  psKitchen.setBuffer(buffer);
+  psKitchen.setLoop(true);  
+  psKitchen.setRefDistance(1);
+  psKitchen.setDistanceModel('linear');
+  psKitchen.setMaxDistance(5);
+  psKitchen.setVolume(0.4);
+
+  cauldron.add(psKitchen)
+});
 
 // Setup inputs
 const input = {
@@ -662,7 +716,21 @@ const input = {
   twist: false,
 };
 
+let soundStarted = false;
 document.addEventListener('keydown', (event) => {
+  // Initializing Cornelius sound when palyer first start playing the game and
+  // then initializing the rest
+  if (!soundStarted) {
+    cornelliusSound.onEnded = function() {
+      bgSound.play();
+      positionalSounds.forEach((sound) => {
+        sound.play();
+      });
+    };
+    cornelliusSound.play();
+    soundStarted = true;
+  }
+  
   switch (event.code) {
     case 'KeyW':
       input.moveForward = true;
@@ -745,6 +813,11 @@ const MAX_DELTA_TIME = 0.1; // seconds
 
 function animate( timestamp: DOMHighResTimeStamp ) {
   stats.begin();
+
+  // Mapping the listener to the player position, but camera orientation so
+  // that the 3rd person POV doesn't sound weird
+  playerPivot.getWorldPosition(listener.position);
+  camera.getWorldQuaternion(listener.quaternion);
 
   // Frame delta time
   const time = timestamp * 0.001;
