@@ -804,10 +804,26 @@ const input = {
   twist: false,
 };
 
+// Initializing sound, either via user click or keyboard interaction
 let soundStarted = false;
+window.addEventListener('pointerdown', () => {
+  // Initializing Cornelius sound when palyer first start playing the game by
+  // clicking and then initializing the rest
+  if (!soundStarted) {
+    cornelliusSound.onEnded = function() {
+      bgSound.play();
+      positionalSounds.forEach((sound) => {
+        sound.play();
+      });
+    };
+    cornelliusSound.play();
+    soundStarted = true;
+  }  
+}, { once: true });
+
 document.addEventListener('keydown', (event) => {
-  // Initializing Cornelius sound when palyer first start playing the game and
-  // then initializing the rest
+  // Initializing Cornelius sound when palyer first start playing the game by
+  // using and the keyboard and then initializing the rest
   if (!soundStarted) {
     cornelliusSound.onEnded = function() {
       bgSound.play();
