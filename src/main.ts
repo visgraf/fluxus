@@ -21,7 +21,7 @@ function convertVector(v: RAPIER.Vector): THREE.Vector3 {
   return new THREE.Quaternion(x, y, z, w);
 }*/
 
-function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, referenceOrientation: THREE.Quaternion, phases: number[], twisting: number): THREE.Vector3[] {
+function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, referenceOrientation: THREE.Quaternion, phase: number, twisting: number): THREE.Vector3 | null {
   const inverseQuaternion = referenceOrientation.clone().invert();
   const localPoint = point.clone().sub(referencePosition).applyQuaternion(inverseQuaternion);
   const dist = localPoint.length();
@@ -37,27 +37,22 @@ function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, r
   const period = upperRho - lowerRho;
   // --- Process Annulus Edges ---
   if ((rho < lowerRho) || (upperRho < rho)) {
-    return [];
+    return null;
   }
-  const newPoints: THREE.Vector3[] = [];
-  for (var phase of phases) {
-    // --- Phase Shift ---
-    const shiftedRho = rho + period * phase;
-    const periodicRho = (((shiftedRho - lowerRho + period) / period) % 3) * period + lowerRho - period;
-    // --- Log-Polar Rotation and Scale (Twisting) ---
-    const ratio = twisting * period / (2.0 * Math.PI);
-    const factor = 1.0 / (1.0 + ratio * ratio);
-    const newRho = (periodicRho + theta * ratio) * factor;
-    const newTheta = (theta - periodicRho * ratio) * factor;
-    // --- New Ray ---
-    const newZ = Math.tanh(newRho);
-    const newPhi = Math.asin(newZ);
-    const newRay = new THREE.Vector3(Math.cos(newTheta) * Math.cos(newPhi), Math.sin(newTheta) * Math.cos(newPhi), newZ);
-    // -- New Point ---
-    const newPoint = newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
-    newPoints.push(newPoint);
-  }
-  return newPoints;
+  // --- Phase Shift ---
+  const shiftedRho = rho + period * phase;
+  const periodicRho = (((shiftedRho - lowerRho + period) / period) % 3) * period + lowerRho - period;
+  // --- Log-Polar Rotation and Scale (Twisting) ---
+  const ratio = twisting * period / (2.0 * Math.PI);
+  const factor = 1.0 / (1.0 + ratio * ratio);
+  const newRho = (periodicRho + theta * ratio) * factor;
+  const newTheta = (theta - periodicRho * ratio) * factor;
+  // --- New Ray ---
+  const newZ = Math.tanh(newRho);
+  const newPhi = Math.asin(newZ);
+  const newRay = new THREE.Vector3(Math.cos(newTheta) * Math.cos(newPhi), Math.sin(newTheta) * Math.cos(newPhi), newZ);
+  // -- New Point ---
+  return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
 }
 
 // Setup HUD
@@ -180,6 +175,7 @@ enum CollisionGroup {
   GREEN = 1 << 3,
   BLUE = 1 << 4,
   WHITE = (1 << 2) + (1 << 3) + (1 << 4),
+  BARRIER = 1 << 5,
   ALL = 0xFFFF
 };
 
@@ -205,6 +201,7 @@ playerController.setApplyImpulsesToDynamicBodies(true);
 playerController.disableAutostep();
 playerController.disableSnapToGround();
 playerController.setUp({ x: 0, y: 1, z: 0 });
+playerController.setMaxSlopeClimbAngle(0.0);
 
 function mergeTrimesh(root: THREE.Object3D): { positions: number[]; indices: number[] } {
   const _envTriWorld = new THREE.Vector3();
@@ -296,13 +293,13 @@ const phase = dyno.dynoFloat(0.0);
 const twisting = dyno.dynoFloat(0.0);
 const cameraPos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
 
-function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
+function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Vector4(1, 1, 1, 1), flipColor: number = 0.0) {
   return dyno.dynoBlock(
     { gsplat: dyno.Gsplat },
     { gsplat: dyno.Gsplat },
     ({ gsplat }) => {
       const d = new dyno.Dyno({
-        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", phase: "float", twisting: "float", cameraPos: "vec3" },
+        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", flipColor: "float", phase: "float", twisting: "float", cameraPos: "vec3" },
         outTypes: { gsplat: dyno.Gsplat },
         globals: () => [dyno.unindent(`
           vec3 rotatePos(vec4 rot, vec3 pos) {
@@ -319,6 +316,7 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
         `)],
         statements: ({ inputs, outputs }) => dyno.unindentLines(`
           ${outputs.gsplat} = ${inputs.gsplat};
+          ${outputs.gsplat}.rgba = mix(${outputs.gsplat}.rgba, ${outputs.gsplat}.rgba.bgra, ${inputs.flipColor});
           ${outputs.gsplat}.rgba *= ${inputs.rgba};
           vec4 inverseRot = ${inputs.referenceQuat} * vec4(1.0, 1.0, 1.0, -1.0);
           vec3 splatPos = rotatePos(inverseRot, ${inputs.gsplat}.center - ${inputs.referencePos});
@@ -371,6 +369,7 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4) {
         referencePos: referencePos,
         referenceQuat: referenceQuat,
         rgba: dyno.dynoConst("vec4", rgba),
+        flipColor: dyno.dynoConst("float", flipColor),
         phase: dyno.sub(phase, dyno.dynoConst("float", basePhase)),
         twisting: twisting,
         cameraPos: cameraPos,
@@ -392,7 +391,6 @@ class Transmitter {
   tip: THREE.Group;
   models: SplatMesh[];
   basePhases: number[];
-  beams: Line2[];
  
   constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
     const radius = 0.18;
@@ -429,8 +427,6 @@ class Transmitter {
       model.updateGenerator();
       this.models.push(model);
     }
-
-    this.beams = [];
   }
 
   updatePosition(): void {
@@ -452,8 +448,96 @@ class Transmitter {
     const tipPosition = new THREE.Vector3();
     return this.tip.getWorldPosition(tipPosition);
   }
+}
+
+class Barrier {
+  pivot: THREE.Group;
+  collider: RAPIER.Collider;
+  body: RAPIER.RigidBody;
+  models: SplatMesh[];
+  basePhases: number[];
+
+  signalTotal: number;
+  signalCounter: number;
+
+  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
+    const radius = 0.8;
+
+    this.basePhases = basePhases;
+
+    const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z);
+    this.body = rapierWorld.createRigidBody(rigidBodyDesc);
+
+    const colliderDesc = RAPIER.ColliderDesc.ball(radius);
+    colliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, collisionGroup + CollisionGroup.PLAYER));
+    this.collider = rapierWorld.createCollider(colliderDesc, this.body);
+
+    this.pivot = new THREE.Group();
+    this.pivot.position.set(x, y, z);
+    scene.add(this.pivot);
+
+    this.models = [];
+    for (var basePhase of basePhases) {
+      const model = new SplatMesh({ url: asset, lod: false });
+      model.quaternion.identity();
+      model.scale.setScalar(1.3);
+      model.position.set(0, 0, 0);
+      this.pivot.add(model);
+      model.worldModifier = createSplatEffect(basePhase, rgba, 1.0);
+      model.updateGenerator();
+      this.models.push(model);
+    }
+
+    this.signalTotal = 0;
+    this.signalCounter = 0;
+  }
+
+  updateState() {
+    const barrierActive = this.signalCounter < this.signalTotal;
+    this.body.setEnabled(barrierActive);
+    for (var model of this.models) {
+      model.opacity = +barrierActive;
+    }
+    this.signalCounter = 0;
+  }
+}
+
+class Receiver {
+  pivot: THREE.Group;
+  model: SplatMesh;
+  basePhase: number;
+  beams: Line2[];
+
+  barrier: Barrier;
+
+  constructor(x:number, y: number, z: number, asset: string, basePhase: number, barrier: Barrier, rgba: THREE.Vector4) {
+    this.basePhase = basePhase;
+    this.barrier = barrier;
+
+    this.barrier.signalTotal++;
+
+    this.pivot = new THREE.Group();
+    this.pivot.position.set(x, y, z);
+    scene.add(this.pivot);
+
+    this.model = new SplatMesh({ url: asset, lod: false });
+    this.model.scale.setScalar(0.14);
+    this.model.position.set(0, 0, 0);
+    this.pivot.add(this.model);
+    this.model.worldModifier = createSplatEffect(basePhase, rgba);
+    this.model.updateGenerator();
+
+    this.beams = [];
+  }
+
+  getPos(): THREE.Vector3 {
+    const position = new THREE.Vector3();
+    return this.pivot.getWorldPosition(position);
+  }
 
   addBeam(transmitterPoint: THREE.Vector3, receiverPoint: THREE.Vector3) {
+    this.barrier.signalCounter++;
+
     const geometry = new LineGeometry();
 		geometry.setPositions([
       transmitterPoint.x, transmitterPoint.y, transmitterPoint.z,
@@ -480,75 +564,82 @@ class Transmitter {
   }
 }
 
-class Receiver {
-  pivot: THREE.Group;
-  models: SplatMesh[];
-  basePhases: number[];
-
-  constructor(x:number, y: number, z: number, angle: number, asset: string, basePhases: number[], rgba: THREE.Vector4) {
-    this.basePhases = basePhases;
-
-    this.pivot = new THREE.Group();
-    this.pivot.position.set(x, y, z);
-    scene.add(this.pivot);
-
-    this.models = [];
-    for (var basePhase of basePhases) {
-      const model = new SplatMesh({ url: asset, lod: false });
-      model.quaternion.setFromAxisAngle( new THREE.Vector3(0, 1, 0), angle);
-      model.scale.setScalar(0.14);
-      model.position.set(0, 0, 0);
-      this.pivot.add(model);
-      model.worldModifier = createSplatEffect(basePhase, rgba);
-      model.updateGenerator();
-      this.models.push(model);
-    }
-  }
-
-  getPos(): THREE.Vector3 {
-    const position = new THREE.Vector3();
-    return this.pivot.getWorldPosition(position);
-  }
-
-  activate() {
-    //
-  }
-
-  deactivate() {
-    //
-  }
-}
-
 //
+const barriers: Barrier[] = [];
+const receivers: Receiver[] = [];
 const transmitters: Transmitter[] = [];
 
+// Lab
+const labBarrier = new Barrier(
+  1.7, 0.5, 2.0,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  CollisionGroup.WHITE,
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(labBarrier);
+
+const labReceiver = new Receiver(
+  0.75, 1.3, 1.15,
+  './receiver.spz', 0.0, labBarrier,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(labReceiver);
+
+const labTransmitter = new Transmitter(
+  -0.05643090978264809, 0.5, -2.157003402709961,
+  './transmitter.spz', [0.0],
+  CollisionGroup.RED,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+transmitters.push(labTransmitter);
+
+const labTransmitter2 = new Transmitter(
+  0.9295482039451599, 0.5, -2.4102461338043213,
+  './transmitter.spz', [1.0],
+  CollisionGroup.GREEN,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+transmitters.push(labTransmitter2);
+
+//Hall
+
+//Bathroom
+const bathroomBarrier = new Barrier(
+  7.624645709991455, 0.5, 8.343265533447266,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  CollisionGroup.WHITE,
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(bathroomBarrier);
+
+const bathroomTransmitter = new Transmitter(
+  7.624645709991455, 0.5, 8.343265533447266,
+  './transmitter.spz', [2.0],
+  CollisionGroup.BLUE,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+transmitters.push(bathroomTransmitter);
+
+const bathroomReceiver = new Receiver(
+  20.0, 20.0, 20.0,
+  './receiver.spz', 0.0, bathroomBarrier,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(bathroomReceiver);
+
+//Bedroom
+
+//Kitchen
+
+/*
 transmitters.push(new Transmitter(
   0.5, 0.5, 0.0,
   './transmitter.spz', [0.0, 1.0, 2.0],
   CollisionGroup.WHITE,
   new THREE.Vector4(3.0, 3.0, 3.0, 1.0)
 ));
+*/
 
-transmitters.push(new Transmitter(
-  1.0, 0.5, -2.2,
-  './transmitter.spz', [1.0],
-  CollisionGroup.GREEN,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
-));
-
-const receivers: Receiver[] = [];
-
-receivers.push(new Receiver(
-  0.75, 1.0, 1.15, Math.PI,
-  './receiver.spz', [0.0],
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
-));
-
-receivers.push(new Receiver(
-  -1.35, 1.0, -2.0, Math.PI/2,
-  './receiver.spz', [0.0],
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
-));
 
 //
 rapierWorld.updateSceneQueries();
@@ -595,7 +686,7 @@ class ParallelWorld {
   left: ParallelWorld;
   right: ParallelWorld;
 
-  constructor(asset: string, basePhase: number, collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
+  constructor(asset: string, basePhase: number, collisionGroup: CollisionGroup) {
     this.basePhase = basePhase;
     this.collisionGroup = collisionGroup
 
@@ -606,7 +697,7 @@ class ParallelWorld {
     this.model.updateGenerator();
     this.model.updateVersion();
 
-    this.model.worldModifier = createSplatEffect(basePhase, rgba);
+    this.model.worldModifier = createSplatEffect(basePhase);
     this.model.updateGenerator();
 
     this.transmitters = [];
@@ -624,20 +715,17 @@ class ParallelWorld {
 
 const worldRed = new ParallelWorld(
   './world_red.spz', 0.0,
-  CollisionGroup.RED,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  CollisionGroup.RED
 );
 
 const worldGreen = new ParallelWorld(
   './world_green.spz', 1.0,
-  CollisionGroup.GREEN,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  CollisionGroup.GREEN
 );
 
 const worldBlue = new ParallelWorld(
   './world_blue.spz', 2.0,
-  CollisionGroup.BLUE,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  CollisionGroup.BLUE
 );
 
 worldRed.setNeighbors(worldBlue, worldGreen);
@@ -847,6 +935,13 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   // Adjust movement length according to selected speed
   desiredMovement.multiplyScalar(deltaTime * (input.sprint ? sprintSpeed : playerSpeed));
 
+  //
+  const worldRay = new RAPIER.Ray(playerBody.translation(), new RAPIER.Vector3(0, -1, 0));
+  const worldHit = rapierWorld.castRay(worldRay, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WORLD));
+  if (worldHit != null) {
+    desiredMovement.y = 1.0 - worldHit.toi;
+  }
+
   // Compute allowed movement based on desired movement
   playerController.computeColliderMovement(playerCollider, desiredMovement);
   const playerMovement = convertVector(playerController.computedMovement());
@@ -965,44 +1060,34 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   worldBlue.model.updateVersion();
 
   //
-  const transmitterPoints: { transmitterPoint: THREE.Vector3, transmitter: Transmitter }[] = [];
   for (var transmitter of transmitters) {
     transmitter.updatePose();
-    transmitter.clearBeams();
-
-    const phases = transmitter.basePhases.map( basePhase => phase.value - basePhase );
-    const newPositions = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phases, twisting.value);
-    transmitterPoints.push(...newPositions.map( point => ( { transmitterPoint: point, transmitter: transmitter } )));
   }
 
   //
-  const receiverPoints: { receiverPoint: THREE.Vector3, receiver: Receiver }[] = [];
   for (var receiver of receivers) {
-    receiver.deactivate();
-
-    const phases = receiver.basePhases.map( basePhase => phase.value - basePhase );
-    const newPositions = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phases, twisting.value);
-    receiverPoints.push(...newPositions.map( point => ( { receiverPoint: point, receiver: receiver } )));
-  }
-
-  //
-  const allowedSquaredDistance = 5.0;
-  for (const { transmitterPoint, transmitter } of transmitterPoints) {
-    let closestReceiver: Receiver | null = null;
-    let closestPoint: THREE.Vector3 = new THREE.Vector3();
-    let smallestSquaredDistance: number = allowedSquaredDistance;
-    for (const { receiverPoint, receiver } of receiverPoints) {
-      const squaredDistance = transmitterPoint.distanceToSquared(receiverPoint);
-      if (squaredDistance < smallestSquaredDistance) {
-        smallestSquaredDistance = squaredDistance;
-        closestReceiver = receiver;
-        closestPoint.copy(receiverPoint)
+    receiver.clearBeams();
+    const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
+    if (receiverPosition != null) {
+      const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
+      const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE));
+      if (hit != null) {
+        const transmitterBody = hit.collider.parent();
+        if (transmitterBody != null) {
+          const transmitter = transmitterBody.userData as Transmitter;
+          for (var basePhase of transmitter.basePhases) {
+            const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
+            if (transmitterPosition != null) {
+              receiver.addBeam(transmitterPosition, receiverPosition);
+            }
+          }
+        }
       }
     }
-    if (closestReceiver != null) {
-      closestReceiver.activate();
-      transmitter.addBeam(transmitterPoint, closestPoint);
-    }
+  }
+
+  for (var barrier of barriers) {
+    barrier.updateState();
   }
   
   // Render scene
