@@ -391,8 +391,11 @@ class Transmitter {
   tip: THREE.Group;
   models: SplatMesh[];
   basePhases: number[];
+  index: number;
  
-  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
+  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4, index: number) {
+    this.index = index;
+    
     const radius = 0.18;
     const height = 0.45;
 
@@ -589,7 +592,8 @@ const labTransmitter = new Transmitter(
   -0.05643090978264809, 0.5, -2.157003402709961,
   './transmitter.spz', [0.0],
   CollisionGroup.RED,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
 );
 transmitters.push(labTransmitter);
 
@@ -597,7 +601,8 @@ const labTransmitter2 = new Transmitter(
   0.9295482039451599, 0.5, -2.4102461338043213,
   './transmitter.spz', [1.0],
   CollisionGroup.GREEN,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
 );
 transmitters.push(labTransmitter2);
 
@@ -616,7 +621,8 @@ const bathroomTransmitter = new Transmitter(
   7.624645709991455, 0.5, 8.343265533447266,
   './transmitter.spz', [2.0],
   CollisionGroup.BLUE,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
 );
 transmitters.push(bathroomTransmitter);
 
@@ -734,61 +740,127 @@ worldBlue.setNeighbors(worldGreen, worldRed);
 
 let currentWorld: ParallelWorld = worldRed;
 
+// ############################################################################
+// ############################### SOUND BLOCK ################################
+// ############################################################################
+
+// Setting up background (non-positional) sounds
+function loadingBackgroundSound(
+  audioLoader: THREE.AudioLoader, 
+  sound: THREE.Audio, 
+  filePath: string,
+  loop: boolean,
+  volume: number,
+): void {
+  audioLoader.load(filePath, function(buffer) {
+    sound.setBuffer(buffer);
+    sound.setLoop(loop);
+    sound.setVolume(volume);
+  });
+}
+
+// Setting up positional sounds
+function loadingPositionalSound(
+  audioLoader: THREE.AudioLoader, 
+  sound: THREE.PositionalAudio, 
+  filePath: string,
+  rate: number,
+  refDist: number,
+  maxDist: number,
+  volume: number,
+  geometryAttach: THREE.Object3D | THREE.Group
+): void {
+  audioLoader.load(filePath, function(buffer) {
+    sound.setBuffer(buffer);
+    sound.setLoop(true);  
+    sound.setPlaybackRate(rate);
+    sound.setRefDistance(refDist);
+    sound.setDistanceModel('linear');
+    sound.setMaxDistance(maxDist);
+    sound.setVolume(volume);
+    geometryAttach.add(sound)
+  });
+}
+
 // Connecting listener to the scene so we can use character position and camera
 // orientation
 const listener = new THREE.AudioListener();
 scene.add(listener);
 
 // Setting up background sound and Cornellius sound (neither positional)
-const cornelliusSound = new THREE.Audio(listener);
 const audioLoader = new THREE.AudioLoader();
-audioLoader.load('./cornelius_intro.mp3', function(buffer) {
-  cornelliusSound.setBuffer(buffer);
-  cornelliusSound.setLoop(false);
-  cornelliusSound.setVolume(0.7);
-});
+const cornelliusSound = new THREE.Audio(listener);
+loadingBackgroundSound(audioLoader, cornelliusSound, './cornelius_intro.mp3', false, 0.7);
 
 const bgSound = new THREE.Audio(listener);
-audioLoader.load('./soundtrack_edited.wav', function(buffer) {
-  bgSound.setBuffer(buffer);
-  bgSound.setLoop(true);
-  bgSound.setVolume(0.3);
-});
+loadingBackgroundSound(audioLoader, bgSound, './soundtrack_edited.wav', true, 0.1);
 
 // Setting up positional audios for force fields
 const positionalSounds: THREE.PositionalAudio[] = [];
-const psTrans = new THREE.PositionalAudio(listener);
-positionalSounds.push(psTrans);
+barriers.forEach((b) => {
+  const barrierSound = new THREE.PositionalAudio(listener);
+  positionalSounds.push(barrierSound);
+  loadingPositionalSound(audioLoader, barrierSound, './force_field.wav', 1, 1, 2, 0.2, b.pivot);
+});
 
-audioLoader.load('./force_field.wav', function(buffer) {
-  psTrans.setBuffer(buffer);
-  psTrans.setLoop(true);  
-  psTrans.setRefDistance(1);
-  psTrans.setDistanceModel('linear');
-  psTrans.setMaxDistance(2);
-  psTrans.setVolume(0.3);
-
-  transmitters[0].pivot.add(psTrans)
+// Setting up positional audios for transmitters
+const transmittersSounds: THREE.PositionalAudio[] = [];
+transmitters.forEach((t) => {
+  const transmitterSound = new THREE.PositionalAudio(listener);
+  transmittersSounds.push(transmitterSound);
+  loadingPositionalSound(audioLoader, transmitterSound, './force_field.wav', 1, 1, 2, 0.2, t.pivot);
 });
 
 // Setting up positional audios for kitchen bubbles
 const cauldron = new THREE.Object3D();
-cauldron.position.set(-5.26, 0.8, 5.78);
+cauldron.position.set(-5.41, 1.10, 9.05);
 scene.add(cauldron);
 
-const psKitchen = new THREE.PositionalAudio(listener);
-positionalSounds.push(psKitchen);
+const kitchenSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(kitchenSound);
+loadingPositionalSound(audioLoader, kitchenSound, './bath_bubbles_edited.wav',  1.0, 1, 5, 0.5, cauldron);
 
-audioLoader.load('./multiple_potions_bubbles.wav', function(buffer) {
-  psKitchen.setBuffer(buffer);
-  psKitchen.setLoop(true);  
-  psKitchen.setRefDistance(1);
-  psKitchen.setDistanceModel('linear');
-  psKitchen.setMaxDistance(5);
-  psKitchen.setVolume(0.4);
+// Setting up positional audios for room fireplace
+const fireplace = new THREE.Object3D();
+fireplace.position.set(10.62, 1.39, 1.22);
+scene.add(fireplace);
 
-  cauldron.add(psKitchen)
-});
+const fireplaceSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(fireplaceSound);
+loadingPositionalSound(audioLoader, fireplaceSound, './fireplace.wav', 1, 1, 5, 0.5, fireplace);
+
+// Setting up positional audios for hall angel choir
+const choir = new THREE.Object3D();
+choir.position.set(1.89, 3.5, 6.55);
+scene.add(choir);
+
+const choirSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(choirSound);
+loadingPositionalSound(audioLoader, choirSound, './choir_2.wav', 1, 1, 5.5, 0.5, choir);
+
+// Setting up positional audios for bathroom bathtub
+const bathtub = new THREE.Object3D();
+bathtub.position.set(9.00, 0.80, 9.00);
+scene.add(bathtub);
+
+const bathtubSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(bathtubSound);
+loadingPositionalSound(audioLoader, bathtubSound, './bath_bubbles_edited.wav', 0.4, 1, 3, 0.2, bathtub);
+
+// Setting up positional audios for bathroom pipes
+const pipes = new THREE.Object3D();
+pipes.position.set(9.16, 1.0, 11.05);
+scene.add(pipes);
+
+const pipesSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(pipesSound);
+loadingPositionalSound(audioLoader, pipesSound, './shower_drain_edited.wav', 0.7, 1, 4, 0.4, pipes);
+
+
+
+// ############################################################################
+// ############################ END OF SOUND BLOCK ############################
+// ############################################################################
 
 // Setup inputs
 const input = {
@@ -1080,7 +1152,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
     transmitter.updatePose();
   }
 
-  //
+  const transmittersToPlay = new Set();
   for (var receiver of receivers) {
     receiver.clearBeams();
     const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
@@ -1095,12 +1167,28 @@ function animate( timestamp: DOMHighResTimeStamp ) {
             const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
             if (transmitterPosition != null) {
               receiver.addBeam(transmitterPosition, receiverPosition);
+              transmittersToPlay.add(transmitter.index);
             }
           }
         }
       }
     }
   }
+
+  // Checking transmitters affecting (or affected by) receivers to play their
+  // sound (and pause others).
+  transmittersSounds.forEach((ts, index) => {
+    if (transmittersToPlay.has(index)) {
+      if (!ts.isPlaying) {
+        ts.play();
+      }
+    }
+    else {
+      if (ts.isPlaying) {
+        ts.pause();
+      }
+    }
+  });
 
   for (var barrier of barriers) {
     barrier.updateState();
