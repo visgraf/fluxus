@@ -459,31 +459,41 @@ class Transmitter {
 //
 class PowerUp {
   pivot: THREE.Group;
-  //collider: RAPIER.Collider;
   model: SplatMesh | null;
   basePhase: number;
+  index: number;
 
-  constructor(x:number, y: number, z: number, asset: string | null, basePhase: number, rgba: THREE.Vector4) {
+  constructor(x:number, y: number, z: number, asset: string | null, basePhase: number, index: number) {
+    this.index = index;
+
     this.basePhase = basePhase;
 
     this.pivot = new THREE.Group();
     this.pivot.position.set(x, y, z);
+    this.pivot.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     scene.add(this.pivot);
 
     if (asset != null) {
       this.model = new SplatMesh({ url: asset, lod: false });
-      this.model.scale.setScalar(0.14);
-      this.model.position.set(0, 0, 0);
+      this.model.scale.setScalar(0.05);
+      this.model.position.set(0, 0.7, 0);
       this.pivot.add(this.model);
-      this.model.worldModifier = createSplatEffect(basePhase, rgba);
+      this.model.worldModifier = createSplatEffect(basePhase);
       this.model.updateGenerator();
     } else {
       this.model = null;
     }
   }
-}
 
-PowerUp;
+  pickup() {
+    if (this.model != null) {
+      this.pivot.remove(this.model);
+      this.model = null;
+
+      console.log("Picked Power Up!");
+    }
+  }
+}
 
 // Setup barrier collider desc.
 const gltfLoader = new GLTFLoader()
@@ -606,6 +616,7 @@ class Receiver {
 }
 
 //
+const powerUps: PowerUp[] = [];
 const barriers: Barrier[] = [];
 const receivers: Receiver[] = [];
 const transmitters: Transmitter[] = [];
@@ -644,6 +655,12 @@ const labTransmitter2 = new Transmitter(
 transmitters.push(labTransmitter2);
 
 //Hall
+const portalPower = new PowerUp(
+  1.199181079864502, 0.0, 5.378575801849365,
+  './moebius.spz', 0.0,
+  powerUps.length
+);
+powerUps.push(portalPower);
 
 //Toylet
 const toyletBarrier1 = new Barrier(
@@ -762,6 +779,13 @@ const bedroomBarrier3 = new Barrier(
 );
 barriers.push(bedroomBarrier3);
 
+const spinPower = new PowerUp(
+  8.152009963989258, 1.1, -3.9080374240875244,
+  './moebius.spz', 0.0,
+  powerUps.length
+);
+powerUps.push(spinPower);
+
 const portalSpin = new Transmitter(
   8.152009963989258, 1.1, -3.9080374240875244,
   './transmitter.spz', [0.0],
@@ -795,7 +819,7 @@ const rapierDebugLines = new THREE.LineSegments(
   rapierDebugGeom,
   new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false }),
 );
-rapierDebugLines.visible = false;
+rapierDebugLines.visible = true;
 scene.add(rapierDebugLines);
 
 function updateRapierDebugLines() {
@@ -1166,7 +1190,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   }
 
   // Compute allowed movement based on desired movement
-  playerController.computeColliderMovement(playerCollider, desiredMovement);
+  playerController.computeColliderMovement(playerCollider, desiredMovement, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS);
   const playerMovement = convertVector(playerController.computedMovement());
 
   // Update player rigid body position
@@ -1282,7 +1306,16 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   worldGreen.model.updateVersion();
   worldBlue.model.updateVersion();
 
-  //
+  // Check power up acquisition
+  for (var powerUp of powerUps) {
+    const ray = new RAPIER.Ray(powerUp.pivot.position, new RAPIER.Vector3(0, 1, 0));
+    const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.PLAYER));
+    if (hit != null) {
+      powerUp.pickup();
+    }
+  }
+
+  // Update transmitter poses
   for (var transmitter of transmitters) {
     transmitter.updatePose();
   }
