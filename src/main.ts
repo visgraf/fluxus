@@ -946,13 +946,19 @@ function loadingPositionalSound(
 const listener = new THREE.AudioListener();
 scene.add(listener);
 
-// Setting up background sound and Cornellius sound (neither positional)
+// Setting up background sound and Cornellius sounds (neither positional)
 const audioLoader = new THREE.AudioLoader();
 const cornelliusSound = new THREE.Audio(listener);
 loadingBackgroundSound(audioLoader, cornelliusSound, './cornelius_intro.mp3', false, 0.7);
 
+const cornelliusPowerUp1Sound = new THREE.Audio(listener);
+loadingBackgroundSound(audioLoader, cornelliusPowerUp1Sound, './cornelius_when_we_get_portal.mp3', false, 0.7);
+
+const cornelliusPowerUp2Sound = new THREE.Audio(listener);
+loadingBackgroundSound(audioLoader, cornelliusPowerUp2Sound, './cornelius_when_we_get_spin.mp3', false, 0.7);
+
 const bgSound = new THREE.Audio(listener);
-loadingBackgroundSound(audioLoader, bgSound, './soundtrack_edited.wav', true, 0.1);
+loadingBackgroundSound(audioLoader, bgSound, './soundtrack_edited.wav', true, 0.05);
 
 // Setting up positional audios for force fields
 const positionalSounds: THREE.PositionalAudio[] = [];
@@ -960,6 +966,14 @@ barriers.forEach((b) => {
   const barrierSound = new THREE.PositionalAudio(listener);
   positionalSounds.push(barrierSound);
   loadingPositionalSound(audioLoader, barrierSound, './force_field.wav', 1, 1, 2, 0.2, b.pivot);
+});
+
+// Setting up positional audios for power ups
+const powerUpsSounds: THREE.PositionalAudio[] = [];
+powerUps.forEach((p) => {
+  const powerUpSound = new THREE.PositionalAudio(listener);
+  powerUpsSounds.push(powerUpSound);
+  loadingPositionalSound(audioLoader, powerUpSound, './fairy_dust_2.wav', 0.8, 1, 2.5, 0.25, p.pivot);
 });
 
 // Setting up positional audios for transmitters
@@ -1015,8 +1029,6 @@ const pipesSound = new THREE.PositionalAudio(listener);
 positionalSounds.push(pipesSound);
 loadingPositionalSound(audioLoader, pipesSound, './shower_drain_edited.wav', 0.7, 1, 4, 0.4, pipes);
 
-
-
 // ############################################################################
 // ############################ END OF SOUND BLOCK ############################
 // ############################################################################
@@ -1046,6 +1058,9 @@ window.addEventListener('pointerdown', () => {
       positionalSounds.forEach((sound) => {
         sound.play();
       });
+      powerUpsSounds.forEach((sound) => {
+        sound.play();
+      });
     };
     cornelliusSound.play();
     soundStarted = true;
@@ -1059,6 +1074,9 @@ document.addEventListener('keydown', (event) => {
     cornelliusSound.onEnded = function() {
       bgSound.play();
       positionalSounds.forEach((sound) => {
+        sound.play();
+      });
+      powerUpsSounds.forEach((sound) => {
         sound.play();
       });
     };
@@ -1312,6 +1330,19 @@ function animate( timestamp: DOMHighResTimeStamp ) {
     const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.PLAYER));
     if (hit != null) {
       powerUp.pickup();
+
+      // Deactivating power up asset sound when picking it up and playing
+      // appropriate cornellius sounds
+      if (powerUpsSounds[powerUp.index].isPlaying) {
+        powerUpsSounds[powerUp.index].pause();
+
+        if (powerUp.index == 0) {
+          cornelliusPowerUp1Sound.play();
+        }
+        else {
+          cornelliusPowerUp2Sound.play();
+        }
+      }
     }
   }
 
