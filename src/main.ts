@@ -734,61 +734,79 @@ worldBlue.setNeighbors(worldGreen, worldRed);
 
 let currentWorld: ParallelWorld = worldRed;
 
+// ############################################################################
+// ############################### SOUND BLOCK ################################
+// ############################################################################
+
+// Setting up background (non-positional) sounds
+function loadingBackgroundSound(
+  audioLoader: THREE.AudioLoader, 
+  sound: THREE.Audio, 
+  filePath: string,
+  loop: boolean,
+  volume: number,
+): void {
+  audioLoader.load(filePath, function(buffer) {
+    sound.setBuffer(buffer);
+    sound.setLoop(loop);
+    sound.setVolume(volume);
+  });
+}
+
+// Setting up positional sounds
+function loadingPositionalSound(
+  audioLoader: THREE.AudioLoader, 
+  sound: THREE.PositionalAudio, 
+  filePath: string,
+  refDist: number,
+  maxDist: number,
+  volume: number,
+  geometryAttach: THREE.Object3D | THREE.Group
+): void {
+  audioLoader.load(filePath, function(buffer) {
+    sound.setBuffer(buffer);
+    sound.setLoop(true);  
+    sound.setRefDistance(refDist);
+    sound.setDistanceModel('linear');
+    sound.setMaxDistance(maxDist);
+    sound.setVolume(volume);
+    geometryAttach.add(sound)
+  });
+}
+
 // Connecting listener to the scene so we can use character position and camera
 // orientation
 const listener = new THREE.AudioListener();
 scene.add(listener);
 
 // Setting up background sound and Cornellius sound (neither positional)
-const cornelliusSound = new THREE.Audio(listener);
 const audioLoader = new THREE.AudioLoader();
-audioLoader.load('./cornelius_intro.mp3', function(buffer) {
-  cornelliusSound.setBuffer(buffer);
-  cornelliusSound.setLoop(false);
-  cornelliusSound.setVolume(0.7);
-});
+const cornelliusSound = new THREE.Audio(listener);
+loadingBackgroundSound(audioLoader, cornelliusSound, './cornelius_intro.mp3', false, 0.7);
 
 const bgSound = new THREE.Audio(listener);
-audioLoader.load('./soundtrack_edited.wav', function(buffer) {
-  bgSound.setBuffer(buffer);
-  bgSound.setLoop(true);
-  bgSound.setVolume(0.3);
-});
+loadingBackgroundSound(audioLoader, bgSound, './soundtrack_edited.wav', true, 0.2);
 
 // Setting up positional audios for force fields
 const positionalSounds: THREE.PositionalAudio[] = [];
-const psTrans = new THREE.PositionalAudio(listener);
-positionalSounds.push(psTrans);
-
-audioLoader.load('./force_field.wav', function(buffer) {
-  psTrans.setBuffer(buffer);
-  psTrans.setLoop(true);  
-  psTrans.setRefDistance(1);
-  psTrans.setDistanceModel('linear');
-  psTrans.setMaxDistance(2);
-  psTrans.setVolume(0.3);
-
-  transmitters[0].pivot.add(psTrans)
+barriers.forEach((b) => {
+  const barrierSound = new THREE.PositionalAudio(listener);
+  positionalSounds.push(barrierSound);
+  loadingPositionalSound(audioLoader, barrierSound, './force_field.wav', 1, 2, 0.2, b.pivot);
 });
 
 // Setting up positional audios for kitchen bubbles
 const cauldron = new THREE.Object3D();
-cauldron.position.set(-5.26, 0.8, 5.78);
+cauldron.position.set(-5.41, 1.10, 9.05);
 scene.add(cauldron);
 
-const psKitchen = new THREE.PositionalAudio(listener);
-positionalSounds.push(psKitchen);
+const kitchenSound = new THREE.PositionalAudio(listener);
+positionalSounds.push(kitchenSound);
+loadingPositionalSound(audioLoader, kitchenSound, './single_potion_bubbles.wav', 1, 5, 0.5, cauldron);
 
-audioLoader.load('./multiple_potions_bubbles.wav', function(buffer) {
-  psKitchen.setBuffer(buffer);
-  psKitchen.setLoop(true);  
-  psKitchen.setRefDistance(1);
-  psKitchen.setDistanceModel('linear');
-  psKitchen.setMaxDistance(5);
-  psKitchen.setVolume(0.4);
-
-  cauldron.add(psKitchen)
-});
+// ############################################################################
+// ############################ END OF SOUND BLOCK ############################
+// ############################################################################
 
 // Setup inputs
 const input = {
