@@ -395,7 +395,7 @@ class Transmitter {
  
   constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4, index: number) {
     this.index = index;
-    
+
     const radius = 0.18;
     const height = 0.45;
 
@@ -410,6 +410,7 @@ class Transmitter {
     const colliderDesc = RAPIER.ColliderDesc.cone(height/2, radius);
     colliderDesc.setCollisionGroups(createGroupMask(collisionGroup, CollisionGroup.ALL - CollisionGroup.WHITE + collisionGroup));
     this.collider = rapierWorld.createCollider(colliderDesc, this.body);
+    rapierWorld.updateSceneQueries();
 
     this.pivot = new THREE.Group();
     scene.add(this.pivot);
@@ -453,6 +454,46 @@ class Transmitter {
   }
 }
 
+
+
+//
+class PowerUp {
+  pivot: THREE.Group;
+  //collider: RAPIER.Collider;
+  model: SplatMesh | null;
+  basePhase: number;
+
+  constructor(x:number, y: number, z: number, asset: string | null, basePhase: number, rgba: THREE.Vector4) {
+    this.basePhase = basePhase;
+
+    this.pivot = new THREE.Group();
+    this.pivot.position.set(x, y, z);
+    scene.add(this.pivot);
+
+    if (asset != null) {
+      this.model = new SplatMesh({ url: asset, lod: false });
+      this.model.scale.setScalar(0.14);
+      this.model.position.set(0, 0, 0);
+      this.pivot.add(this.model);
+      this.model.worldModifier = createSplatEffect(basePhase, rgba);
+      this.model.updateGenerator();
+    } else {
+      this.model = null;
+    }
+  }
+}
+
+PowerUp;
+
+// Setup barrier collider desc.
+const gltfLoader = new GLTFLoader()
+const barrierGLTF = await gltfLoader.loadAsync('./barrier_collider.glb')
+const { positions, indices } = mergeTrimesh(barrierGLTF.scene);
+const barrierVerts = new Float32Array(positions);
+const barrierIdx = new Uint32Array(indices);
+const barrierColliderDesc = RAPIER.ColliderDesc.trimesh(barrierVerts, barrierIdx);
+barrierColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, CollisionGroup.WHITE + CollisionGroup.PLAYER));
+
 class Barrier {
   pivot: THREE.Group;
   collider: RAPIER.Collider;
@@ -463,17 +504,14 @@ class Barrier {
   signalTotal: number;
   signalCounter: number;
 
-  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4) {
-    const radius = 0.8;
-
+  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], rgba: THREE.Vector4) {
     this.basePhases = basePhases;
 
     const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z);
     this.body = rapierWorld.createRigidBody(rigidBodyDesc);
 
-    const colliderDesc = RAPIER.ColliderDesc.ball(radius);
-    colliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, collisionGroup + CollisionGroup.PLAYER));
-    this.collider = rapierWorld.createCollider(colliderDesc, this.body);
+    this.collider = rapierWorld.createCollider(barrierColliderDesc, this.body);
+    rapierWorld.updateSceneQueries();
 
     this.pivot = new THREE.Group();
     this.pivot.position.set(x, y, z);
@@ -483,7 +521,7 @@ class Barrier {
     for (var basePhase of basePhases) {
       const model = new SplatMesh({ url: asset, lod: false });
       model.quaternion.identity();
-      model.scale.setScalar(1.3);
+      model.scale.setScalar(1.0);
       model.position.set(0, 0, 0);
       this.pivot.add(model);
       model.worldModifier = createSplatEffect(basePhase, rgba, 1.0);
@@ -542,7 +580,7 @@ class Receiver {
     this.barrier.signalCounter++;
 
     const geometry = new LineGeometry();
-		geometry.setPositions([
+    geometry.setPositions([
       transmitterPoint.x, transmitterPoint.y, transmitterPoint.z,
       receiverPoint.x, receiverPoint.y, receiverPoint.z
     ]);
@@ -574,9 +612,8 @@ const transmitters: Transmitter[] = [];
 
 // Lab
 const labBarrier = new Barrier(
-  1.7, 0.5, 2.0,
+  1.4075300693511963, 0.4, 1.555212140083313,
   './barrier.spz', [0.0, 1.0, 2.0],
-  CollisionGroup.WHITE,
   new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
 );
 barriers.push(labBarrier);
@@ -608,43 +645,141 @@ transmitters.push(labTransmitter2);
 
 //Hall
 
-//Bathroom
-const bathroomBarrier = new Barrier(
-  7.624645709991455, 0.5, 8.343265533447266,
+//Toylet
+const toyletBarrier1 = new Barrier(
+  7.624645709991455, 0.4, 8.343265533447266,
   './barrier.spz', [0.0, 1.0, 2.0],
-  CollisionGroup.WHITE,
   new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
 );
-barriers.push(bathroomBarrier);
+barriers.push(toyletBarrier1);
 
-const bathroomTransmitter = new Transmitter(
+const toyletTransmitter1 = new Transmitter(
   7.624645709991455, 0.5, 8.343265533447266,
   './transmitter.spz', [2.0],
   CollisionGroup.BLUE,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
-transmitters.push(bathroomTransmitter);
+transmitters.push(toyletTransmitter1);
 
-const bathroomReceiver = new Receiver(
-  20.0, 20.0, 20.0,
-  './receiver.spz', 0.0, bathroomBarrier,
+const toyletReceiver1 = new Receiver(
+  8.224555015563965, 1.3, 9.010746002197266,
+  './receiver.spz', 0.0, toyletBarrier1,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
 );
-receivers.push(bathroomReceiver);
+receivers.push(toyletReceiver1);
+
+const toyletBarrier2 = new Barrier(
+  7.330603122711182, 0.4, 10.619728088378906,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(toyletBarrier2);
+
+const toyletTransmitter2 = new Transmitter(
+  7.330603122711182, 0.5, 10.619728088378906,
+  './transmitter.spz', [0.0],
+  CollisionGroup.RED,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
+);
+transmitters.push(toyletTransmitter2);
+
+const toyletReceiver2A = new Receiver(
+  6.821481704711914, 1.3, 10.005276679992676,
+  './receiver.spz', 0.0, toyletBarrier2,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(toyletReceiver2A);
+
+const toyletReceiver2B = new Receiver(
+  8.094793319702148, 1.3, 10.4473237991333,
+  './receiver.spz', 0.0, toyletBarrier2,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(toyletReceiver2B);
 
 //Bedroom
+const bedroomTransmitter0 = new Transmitter(
+  9.396486282348633, 1.1, 1.5349745750427246,
+  './transmitter.spz', [2.0],
+  CollisionGroup.BLUE,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
+);
+transmitters.push(bedroomTransmitter0);
+
+
+
+const bedroomBarrier1 = new Barrier(
+  11.234466552734375, 1.0, -0.992029070854187,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(bedroomBarrier1);
+
+const bedroomTransmitter1 = new Transmitter(
+  11.234466552734375, 1.1, -0.992029070854187,
+  './transmitter.spz', [0.0, 1.0, 2.0],
+  CollisionGroup.WHITE,
+  new THREE.Vector4(3.0, 3.0, 3.0, 1.0),
+  transmitters.length
+);
+transmitters.push(bedroomTransmitter1);
+
+const bedroomReceiver1 = new Receiver(
+  10.382755279541016, 1.9, -0.7960900068283081,
+  './receiver.spz', 0.0, bedroomBarrier1,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(bedroomReceiver1);
+
+
+
+
+
+const bedroomBarrier2 = new Barrier(
+  9.610899925231934, 1.0, -3.3680872917175293,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(bedroomBarrier2);
+
+const bedroomReceiver2 = new Receiver(
+  10.46142578125, 1.9, -2.8999879360198975,
+  './receiver.spz', 0.0, bedroomBarrier2,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(bedroomReceiver2);
+
+
+
+
+const bedroomBarrier3 = new Barrier(
+  8.152009963989258, 1.0, -3.9080374240875244,
+  './barrier.spz', [0.0, 1.0, 2.0],
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+);
+barriers.push(bedroomBarrier3);
+
+const portalSpin = new Transmitter(
+  8.152009963989258, 1.1, -3.9080374240875244,
+  './transmitter.spz', [0.0],
+  CollisionGroup.RED,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
+  transmitters.length
+);
+transmitters.push(portalSpin);
+
+const bedroomReceiver3 = new Receiver(
+  9.610899925231934, 1.9, -3.3680872917175293,
+  './receiver.spz', 0.0, bedroomBarrier3,
+  new THREE.Vector4(1.0, 1.0, 1.0, 1.0)
+);
+receivers.push(bedroomReceiver3);
 
 //Kitchen
 
-/*
-transmitters.push(new Transmitter(
-  0.5, 0.5, 0.0,
-  './transmitter.spz', [0.0, 1.0, 2.0],
-  CollisionGroup.WHITE,
-  new THREE.Vector4(3.0, 3.0, 3.0, 1.0)
-));
-*/
 
 
 //
@@ -1152,22 +1287,25 @@ function animate( timestamp: DOMHighResTimeStamp ) {
     transmitter.updatePose();
   }
 
+  //
   const transmittersToPlay = new Set();
   for (var receiver of receivers) {
     receiver.clearBeams();
     const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
     if (receiverPosition != null) {
       const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
-      const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE));
+      const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE + CollisionGroup.BARRIER));
       if (hit != null) {
         const transmitterBody = hit.collider.parent();
         if (transmitterBody != null) {
-          const transmitter = transmitterBody.userData as Transmitter;
-          for (var basePhase of transmitter.basePhases) {
-            const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
-            if (transmitterPosition != null) {
-              receiver.addBeam(transmitterPosition, receiverPosition);
-              transmittersToPlay.add(transmitter.index);
+          if (transmitterBody.userData != null) {
+            const transmitter = transmitterBody.userData as Transmitter;
+            for (var basePhase of transmitter.basePhases) {
+              const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
+              if (transmitterPosition != null) {
+                receiver.addBeam(transmitterPosition, receiverPosition);
+                transmittersToPlay.add(transmitter.index);
+              }
             }
           }
         }
