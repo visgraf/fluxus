@@ -510,11 +510,14 @@ class Barrier {
   body: RAPIER.RigidBody;
   models: SplatMesh[];
   basePhases: number[];
+  index: number;
 
   signalTotal: number;
   signalCounter: number;
 
-  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], rgba: THREE.Vector4) {
+  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], rgba: THREE.Vector4, index: number) {
+    this.index = index;
+    
     this.basePhases = basePhases;
 
     const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z);
@@ -543,8 +546,22 @@ class Barrier {
     this.signalCounter = 0;
   }
 
-  updateState() {
+  updateState(barriersSounds: THREE.PositionalAudio[], soundStarted: boolean) {
     const barrierActive = this.signalCounter < this.signalTotal;
+    
+    if (soundStarted) {
+      if (!barrierActive) {
+        if (barriersSounds[this.index].isPlaying) {
+          barriersSounds[this.index].pause();
+        }
+      }
+      else {
+        if (!barriersSounds[this.index].isPlaying) {
+          barriersSounds[this.index].play();
+        }
+      }
+    }
+
     this.body.setEnabled(barrierActive);
     for (var model of this.models) {
       model.opacity = +barrierActive;
@@ -625,7 +642,8 @@ const transmitters: Transmitter[] = [];
 const labBarrier = new Barrier(
   1.4075300693511963, 0.4, 1.555212140083313,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(labBarrier);
 
@@ -666,7 +684,8 @@ powerUps.push(portalPower);
 const toyletBarrier1 = new Barrier(
   7.624645709991455, 0.4, 8.343265533447266,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(toyletBarrier1);
 
@@ -689,7 +708,8 @@ receivers.push(toyletReceiver1);
 const toyletBarrier2 = new Barrier(
   7.330603122711182, 0.4, 10.619728088378906,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(toyletBarrier2);
 
@@ -731,7 +751,8 @@ transmitters.push(bedroomTransmitter0);
 const bedroomBarrier1 = new Barrier(
   11.234466552734375, 1.0, -0.992029070854187,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(bedroomBarrier1);
 
@@ -758,7 +779,8 @@ receivers.push(bedroomReceiver1);
 const bedroomBarrier2 = new Barrier(
   9.610899925231934, 1.0, -3.3680872917175293,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(bedroomBarrier2);
 
@@ -775,7 +797,8 @@ receivers.push(bedroomReceiver2);
 const bedroomBarrier3 = new Barrier(
   8.152009963989258, 1.0, -3.9080374240875244,
   './barrier.spz', [0.0, 1.0, 2.0],
-  new THREE.Vector4(5.0, 5.0, 5.0, 0.1)
+  new THREE.Vector4(5.0, 5.0, 5.0, 0.1),
+  barriers.length
 );
 barriers.push(bedroomBarrier3);
 
@@ -949,22 +972,22 @@ scene.add(listener);
 // Setting up background sound and Cornellius sounds (neither positional)
 const audioLoader = new THREE.AudioLoader();
 const cornelliusSound = new THREE.Audio(listener);
-loadingBackgroundSound(audioLoader, cornelliusSound, './cornelius_intro.mp3', false, 0.7);
+loadingBackgroundSound(audioLoader, cornelliusSound, './cornelius_intro.mp3', false, 0.4);
 
 const cornelliusPowerUp1Sound = new THREE.Audio(listener);
-loadingBackgroundSound(audioLoader, cornelliusPowerUp1Sound, './cornelius_when_we_get_portal.mp3', false, 0.7);
+loadingBackgroundSound(audioLoader, cornelliusPowerUp1Sound, './cornelius_when_we_get_portal.mp3', false, 0.4);
 
 const cornelliusPowerUp2Sound = new THREE.Audio(listener);
-loadingBackgroundSound(audioLoader, cornelliusPowerUp2Sound, './cornelius_when_we_get_spin.mp3', false, 0.7);
+loadingBackgroundSound(audioLoader, cornelliusPowerUp2Sound, './cornelius_when_we_get_spin.mp3', false, 0.4);
 
 const bgSound = new THREE.Audio(listener);
 loadingBackgroundSound(audioLoader, bgSound, './soundtrack_edited.wav', true, 0.05);
 
 // Setting up positional audios for force fields
-const positionalSounds: THREE.PositionalAudio[] = [];
+const barriersSounds: THREE.PositionalAudio[] = [];
 barriers.forEach((b) => {
   const barrierSound = new THREE.PositionalAudio(listener);
-  positionalSounds.push(barrierSound);
+  barriersSounds.push(barrierSound);
   loadingPositionalSound(audioLoader, barrierSound, './force_field.wav', 1, 1, 2, 0.2, b.pivot);
 });
 
@@ -981,7 +1004,7 @@ const transmittersSounds: THREE.PositionalAudio[] = [];
 transmitters.forEach((t) => {
   const transmitterSound = new THREE.PositionalAudio(listener);
   transmittersSounds.push(transmitterSound);
-  loadingPositionalSound(audioLoader, transmitterSound, './force_field.wav', 1, 1, 2, 0.2, t.pivot);
+  loadingPositionalSound(audioLoader, transmitterSound, './laser_beam.wav', 1, 1, 2, 0.2, t.pivot);
 });
 
 // Setting up positional audios for kitchen bubbles
@@ -989,6 +1012,7 @@ const cauldron = new THREE.Object3D();
 cauldron.position.set(-5.41, 1.10, 9.05);
 scene.add(cauldron);
 
+const positionalSounds: THREE.PositionalAudio[] = [];
 const kitchenSound = new THREE.PositionalAudio(listener);
 positionalSounds.push(kitchenSound);
 loadingPositionalSound(audioLoader, kitchenSound, './bath_bubbles_edited.wav',  1.0, 1, 5, 0.5, cauldron);
@@ -1058,6 +1082,9 @@ window.addEventListener('pointerdown', () => {
       positionalSounds.forEach((sound) => {
         sound.play();
       });
+      barriersSounds.forEach((sound) => {
+        sound.play();
+      });
       powerUpsSounds.forEach((sound) => {
         sound.play();
       });
@@ -1074,6 +1101,9 @@ document.addEventListener('keydown', (event) => {
     cornelliusSound.onEnded = function() {
       bgSound.play();
       positionalSounds.forEach((sound) => {
+        sound.play();
+      });
+      barriersSounds.forEach((sound) => {
         sound.play();
       });
       powerUpsSounds.forEach((sound) => {
@@ -1229,7 +1259,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   rapierWorld.step();
 
   // Update colliders debug lines
-  updateRapierDebugLines();
+  // updateRapierDebugLines();
 
   // Update camera
   camera.position.add(playerMovement);
@@ -1393,7 +1423,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   });
 
   for (var barrier of barriers) {
-    barrier.updateState();
+    barrier.updateState(barriersSounds, soundStarted);
   }
   
   // Render scene
