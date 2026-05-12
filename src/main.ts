@@ -73,7 +73,9 @@ hintsEl.style.cssText = [
 hintsEl.innerHTML =
   'WASD &mdash; Move &nbsp;&nbsp; Shift &mdash; Sprint &nbsp;&nbsp; Space &mdash; Grab/Drop<br>' +
   'Click + drag &mdash; Orbit camera &nbsp;&nbsp; Scroll &mdash; Zoom<br>' +
-  'QE &mdash; Spin portal &nbsp;&nbsp; RF &mdash; Traverse portal &nbsp;&nbsp; T &mdash; Toggle twist';
+  'RF &mdash; Traverse portal &nbsp;&nbsp; (After Power Up 1)<br>' +
+  'QE &mdash; Spin portal &nbsp;&nbsp; (After Power Up 2)<br>' +
+  'T &mdash; Toggle twist &nbsp;&nbsp; (After Power Up 3)';
 document.body.appendChild(hintsEl);
 
 // Setup stats
