@@ -55,7 +55,7 @@ function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, r
   return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
 }
 
-// Setup groups
+// Setup game states
 enum GameState {
   LOADING,
   WAITING,
@@ -187,13 +187,21 @@ const rapierWorld = new RAPIER.World(gravity);
 
 // Setup groups
 enum CollisionGroup {
-  PLAYER = 1 << 0,
-  WORLD = 1 << 1,
-  RED = 1 << 2,
-  GREEN = 1 << 3,
-  BLUE = 1 << 4,
-  WHITE = (1 << 2) + (1 << 3) + (1 << 4),
-  BARRIER = 1 << 5,
+  WORLD = 1 << 0,
+  PLAYER_RED = 1 << 1,
+  PLAYER_GREEN = 1 << 2,
+  PLAYER_BLUE = 1 << 3,
+  PLAYER_WHITE = (1 << 1) + (1 << 2) + (1 << 3),
+  TRANSMITTER_RED = 1 << 4,
+  TRANSMITTER_GREEN = 1 << 5,
+  TRANSMITTER_BLUE = 1 << 6,
+  TRANSMITTER_WHITE = (1 << 4) + (1 << 5) + (1 << 6),
+  BARRIER = 1 << 7,
+  ENVIRONMENT_RED = (1 << 0) + (1 << 4) + (1 << 7),
+  ENVIRONMENT_GREEN = (1 << 0) + (1 << 5) + (1 << 7),
+  ENVIRONMENT_BLUE = (1 << 0) + (1 << 6) + (1 << 7),
+  ENVIRONMENT_WHITE = (1 << 0) + (1 << 4) + (1 << 5) + (1 << 6) + (1 << 7),
+  EXIT = 1 << 8,
   ALL = 0xFFFF
 };
 
@@ -207,7 +215,7 @@ playerBodyDesc.setTranslation(spawnPosition.x, spawnPosition.y, spawnPosition.z)
 const playerBody = rapierWorld.createRigidBody(playerBodyDesc);
 
 const playerColliderDesc = RAPIER.ColliderDesc.ball(playerRadius);
-playerColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER, CollisionGroup.ALL));
+playerColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_RED, CollisionGroup.ENVIRONMENT_RED));
 const playerCollider = rapierWorld.createCollider(playerColliderDesc, playerBody);
 
 const playerOffset = 0.01;
@@ -411,7 +419,7 @@ class Transmitter {
   basePhases: number[];
   index: number;
  
-  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, rgba: THREE.Vector4, index: number) {
+  constructor(x:number, y: number, z: number, asset: string, basePhases: number[], collisionGroup: CollisionGroup, collisionFilter: CollisionGroup, rgba: THREE.Vector4, index: number) {
     this.index = index;
 
     const radius = 0.18;
@@ -426,7 +434,7 @@ class Transmitter {
     this.body.userData = this;
 
     const colliderDesc = RAPIER.ColliderDesc.cone(height/2, radius);
-    colliderDesc.setCollisionGroups(createGroupMask(collisionGroup, CollisionGroup.ALL - CollisionGroup.WHITE + collisionGroup));
+    colliderDesc.setCollisionGroups(createGroupMask(collisionGroup, collisionFilter));
     this.collider = rapierWorld.createCollider(colliderDesc, this.body);
     rapierWorld.updateSceneQueries();
 
@@ -478,39 +486,49 @@ class Transmitter {
 //
 class PowerUp {
   pivot: THREE.Group;
-  model: SplatMesh | null;
+  model: SplatMesh;
   basePhase: number;
   index: number;
+  gone: boolean;
+  playerCollisionGroup: CollisionGroup;
 
-  constructor(x:number, y: number, z: number, asset: string | null, basePhase: number, index: number) {
+  constructor(x:number, y: number, z: number, asset: string, basePhase: number, playerCollisionGroup: CollisionGroup, index: number) {
     this.index = index;
 
     this.basePhase = basePhase;
+    this.playerCollisionGroup = playerCollisionGroup;
 
     this.pivot = new THREE.Group();
     this.pivot.position.set(x, y, z);
     this.pivot.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     scene.add(this.pivot);
 
-    if (asset != null) {
-      this.model = new SplatMesh({ url: asset, lod: false });
-      splatPromises.push(this.model.initialized);
-      this.model.scale.setScalar(0.05);
-      this.model.position.set(0, 0.7, 0);
-      this.pivot.add(this.model);
-      this.model.worldModifier = createSplatEffect(basePhase);
-      this.model.updateGenerator();
-    } else {
-      this.model = null;
-    }
+    this.model = new SplatMesh({ url: asset, lod: false });
+    splatPromises.push(this.model.initialized);
+    this.model.scale.setScalar(0.05);
+    this.model.position.set(0, 0.7, 0);
+    this.pivot.add(this.model);
+    this.model.worldModifier = createSplatEffect(basePhase);
+    this.model.updateGenerator();
+
+    this.gone = false;
   }
 
   pickup() {
-    if (this.model != null) {
-      this.pivot.remove(this.model);
-      this.model = null;
+    if (!this.gone)
+    this.model.opacity = 0;
+    this.gone = true;
 
-      console.log("Picked Power Up!");
+    switch (this.index) {
+      case 0:
+        // Portal Power
+        break;
+      case 1:
+        // Spin Power
+        break;
+      case 2:
+        // Twist Power
+        break;
     }
   }
 }
@@ -522,7 +540,7 @@ const { positions, indices } = mergeTrimesh(barrierGLTF.scene);
 const barrierVerts = new Float32Array(positions);
 const barrierIdx = new Uint32Array(indices);
 const barrierColliderDesc = RAPIER.ColliderDesc.trimesh(barrierVerts, barrierIdx);
-barrierColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, CollisionGroup.WHITE + CollisionGroup.PLAYER));
+barrierColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, CollisionGroup.ALL));
 
 class Barrier {
   pivot: THREE.Group;
@@ -654,11 +672,46 @@ class Receiver {
   }
 }
 
+// Setup Exit
+const exitBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(-12.157346725463867, -0.5, 6.633674621582031);
+const exitBody = rapierWorld.createRigidBody(exitBodyDesc);
+const exitColliderDesc = RAPIER.ColliderDesc.cylinder(0.1, 1.0);
+exitColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.EXIT, CollisionGroup.ALL));
+const exitCollider = rapierWorld.createCollider(exitColliderDesc, exitBody);
+rapierWorld.updateSceneQueries();
+exitCollider;
+
 //
 const powerUps: PowerUp[] = [];
 const barriers: Barrier[] = [];
 const receivers: Receiver[] = [];
 const transmitters: Transmitter[] = [];
+
+// Power Ups
+const portalPower = new PowerUp(
+  1.199181079864502, 0.0, 5.378575801849365,
+  './moebius.spz', 0.0,
+  CollisionGroup.PLAYER_RED,
+  powerUps.length
+);
+powerUps.push(portalPower);
+
+const spinPower = new PowerUp(
+  8.152009963989258, 0.6, -3.9080374240875244,
+  './moebius.spz', 1.0,
+  CollisionGroup.PLAYER_GREEN,
+  powerUps.length
+);
+powerUps.push(spinPower);
+
+const twistPower = new PowerUp(
+  -6.243780136108398, 0.0, 4.507924556732178,
+  './moebius.spz', 2.0,
+  CollisionGroup.PLAYER_BLUE,
+  powerUps.length
+);
+powerUps.push(twistPower);
+
 
 // Lab
 const labBarrier = new Barrier(
@@ -679,7 +732,7 @@ receivers.push(labReceiver);
 const labTransmitter = new Transmitter(
   -0.05643090978264809, 0.5, -2.157003402709961,
   './transmitter.spz', [0.0],
-  CollisionGroup.RED,
+  CollisionGroup.TRANSMITTER_RED, CollisionGroup.ENVIRONMENT_RED + CollisionGroup.PLAYER_RED,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
@@ -688,19 +741,15 @@ transmitters.push(labTransmitter);
 const labTransmitter2 = new Transmitter(
   0.9295482039451599, 0.5, -2.4102461338043213,
   './transmitter.spz', [1.0],
-  CollisionGroup.GREEN,
+  CollisionGroup.TRANSMITTER_GREEN, CollisionGroup.ENVIRONMENT_GREEN + CollisionGroup.PLAYER_GREEN,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
 transmitters.push(labTransmitter2);
 
 //Hall
-const portalPower = new PowerUp(
-  1.199181079864502, 0.0, 5.378575801849365,
-  './moebius.spz', 0.0,
-  powerUps.length
-);
-powerUps.push(portalPower);
+
+
 
 //Toylet
 const toyletBarrier1 = new Barrier(
@@ -714,7 +763,7 @@ barriers.push(toyletBarrier1);
 const toyletTransmitter1 = new Transmitter(
   7.624645709991455, 0.5, 8.343265533447266,
   './transmitter.spz', [2.0],
-  CollisionGroup.BLUE,
+  CollisionGroup.TRANSMITTER_BLUE, CollisionGroup.ENVIRONMENT_BLUE + CollisionGroup.PLAYER_BLUE,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
@@ -738,7 +787,7 @@ barriers.push(toyletBarrier2);
 const toyletTransmitter2 = new Transmitter(
   7.330603122711182, 0.5, 10.619728088378906,
   './transmitter.spz', [0.0],
-  CollisionGroup.RED,
+  CollisionGroup.TRANSMITTER_RED, CollisionGroup.ENVIRONMENT_RED + CollisionGroup.PLAYER_RED,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
@@ -762,7 +811,7 @@ receivers.push(toyletReceiver2B);
 const bedroomTransmitter0 = new Transmitter(
   9.396486282348633, 1.1, 1.5349745750427246,
   './transmitter.spz', [2.0],
-  CollisionGroup.BLUE,
+  CollisionGroup.TRANSMITTER_BLUE, CollisionGroup.ENVIRONMENT_BLUE + CollisionGroup.PLAYER_BLUE,
   new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
   transmitters.length
 );
@@ -781,7 +830,7 @@ barriers.push(bedroomBarrier1);
 const bedroomTransmitter1 = new Transmitter(
   11.234466552734375, 1.1, -0.992029070854187,
   './transmitter.spz', [0.0, 1.0, 2.0],
-  CollisionGroup.WHITE,
+  CollisionGroup.TRANSMITTER_WHITE, CollisionGroup.ENVIRONMENT_WHITE + CollisionGroup.PLAYER_WHITE,
   new THREE.Vector4(3.0, 3.0, 3.0, 1.0),
   transmitters.length
 );
@@ -823,22 +872,6 @@ const bedroomBarrier3 = new Barrier(
   barriers.length
 );
 barriers.push(bedroomBarrier3);
-
-const spinPower = new PowerUp(
-  8.152009963989258, 1.1, -3.9080374240875244,
-  './moebius.spz', 0.0,
-  powerUps.length
-);
-powerUps.push(spinPower);
-
-const portalSpin = new Transmitter(
-  8.152009963989258, 1.1, -3.9080374240875244,
-  './transmitter.spz', [0.0],
-  CollisionGroup.RED,
-  new THREE.Vector4(1.0, 1.0, 1.0, 1.0),
-  transmitters.length
-);
-transmitters.push(portalSpin);
 
 const bedroomReceiver3 = new Receiver(
   9.610899925231934, 1.9, -3.3680872917175293,
@@ -891,14 +924,14 @@ class ParallelWorld {
   transmitters: Transmitter[];
   receivers: Receiver[];
 
-  collisionGroup: CollisionGroup;
+  transmitterCollisionGroup: CollisionGroup;
 
   left: ParallelWorld;
   right: ParallelWorld;
 
-  constructor(asset: string, basePhase: number, collisionGroup: CollisionGroup) {
+  constructor(asset: string, basePhase: number, transmitterCollisionGroup: CollisionGroup) {
     this.basePhase = basePhase;
-    this.collisionGroup = collisionGroup
+    this.transmitterCollisionGroup = transmitterCollisionGroup
 
     this.model = new SplatMesh({ url: asset, lod: false });
     splatPromises.push(this.model.initialized);
@@ -926,17 +959,17 @@ class ParallelWorld {
 
 const worldRed = new ParallelWorld(
   './world_red.spz', 0.0,
-  CollisionGroup.RED
+  CollisionGroup.TRANSMITTER_RED
 );
 
 const worldGreen = new ParallelWorld(
   './world_green.spz', 1.0,
-  CollisionGroup.GREEN
+  CollisionGroup.TRANSMITTER_GREEN
 );
 
 const worldBlue = new ParallelWorld(
   './world_blue.spz', 2.0,
-  CollisionGroup.BLUE
+  CollisionGroup.TRANSMITTER_BLUE
 );
 
 worldRed.setNeighbors(worldBlue, worldGreen);
@@ -1272,7 +1305,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       // Adjust movement length according to selected speed
       desiredMovement.multiplyScalar(deltaTime * (input.sprint ? sprintSpeed : playerSpeed));
 
-      //
+      // Adjust player flight height
       const worldRay = new RAPIER.Ray(playerBody.translation(), new RAPIER.Vector3(0, -1, 0));
       const worldHit = rapierWorld.castRay(worldRay, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WORLD));
       if (worldHit != null) {
@@ -1328,7 +1361,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       // Update grab and drop actions
       if (heldTransmitter == null) {
         const ray = new RAPIER.Ray(playerPosition, new RAPIER.Vector3(0, -1, 0));
-        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, currentWorld.collisionGroup));
+        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, currentWorld.transmitterCollisionGroup));
         if (hit != null) {
           handModel.visible = true;
           const transmitterBody = hit.collider.parent();
@@ -1372,22 +1405,27 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       let newPhase = phase.value + deltaTime * input.phaseShift;
       if ((phase.value < -1.0 && -1.0 <= newPhase) || (newPhase <= -1.0 && -1.0 < phase.value)) {
         currentWorld = worldBlue;
+        playerCollider.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_BLUE, CollisionGroup.ENVIRONMENT_BLUE));
         phase.value = 2.0;
         input.phaseShift = 0;
       } else if ((phase.value < 0.0 && 0.0 <= newPhase) || (newPhase <= 0.0 && 0.0 < phase.value)) {
         currentWorld = worldRed;
+        playerCollider.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_RED, CollisionGroup.ENVIRONMENT_RED));
         phase.value = 0.0;
         input.phaseShift = 0;
       } else if ((phase.value < 1.0 && 1.0 <= newPhase) || (newPhase <= 1.0 && 1.0 < phase.value)) {
         currentWorld = worldGreen;
+        playerCollider.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_GREEN, CollisionGroup.ENVIRONMENT_GREEN));
         phase.value = 1.0;
         input.phaseShift = 0;
       } else if ((phase.value < 2.0 && 2.0 <= newPhase) || (newPhase <= 2.0 && 2.0 < phase.value)) {
         currentWorld = worldBlue;
+        playerCollider.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_BLUE, CollisionGroup.ENVIRONMENT_BLUE));
         phase.value = 2.0;
         input.phaseShift = 0;
       } else if ((phase.value < 3.0 && 3.0 <= newPhase) || (newPhase <= 3.0 && 3.0 < phase.value)) {
         currentWorld = worldRed;
+        playerCollider.setCollisionGroups(createGroupMask(CollisionGroup.PLAYER_RED, CollisionGroup.ENVIRONMENT_RED));
         phase.value = 0.0;
         input.phaseShift = 0;
       } else {
@@ -1401,7 +1439,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       // Check power up acquisition
       for (var powerUp of powerUps) {
         const ray = new RAPIER.Ray(powerUp.pivot.position, new RAPIER.Vector3(0, 1, 0));
-        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.PLAYER));
+        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, powerUp.playerCollisionGroup));
         if (hit != null) {
           powerUp.pickup();
 
@@ -1410,11 +1448,13 @@ function animate( timestamp: DOMHighResTimeStamp ) {
           if (powerUpsSounds[powerUp.index].isPlaying) {
             powerUpsSounds[powerUp.index].pause();
 
-            if (powerUp.index == 0) {
-              cornelliusPowerUp1Sound.play();
-            }
-            else {
-              cornelliusPowerUp2Sound.play();
+            switch (powerUp.index) {
+              case 0:
+                cornelliusPowerUp1Sound.play();
+                break;
+              case 1:
+                cornelliusPowerUp2Sound.play();
+                break;
             }
           }
         }
@@ -1432,7 +1472,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
         const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
         if (receiverPosition != null) {
           const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
-          const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE + CollisionGroup.BARRIER));
+          const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.TRANSMITTER_WHITE + CollisionGroup.BARRIER));
           if (hit != null) {
             const transmitterBody = hit.collider.parent();
             if (transmitterBody != null) {
@@ -1468,6 +1508,16 @@ function animate( timestamp: DOMHighResTimeStamp ) {
 
       for (var barrier of barriers) {
         barrier.updateState(barriersSounds, soundStarted);
+      }
+
+      // Finish game
+      const finishRay = new RAPIER.Ray(playerPosition, new RAPIER.Vector3(0, -1, 0));
+      const finishHit = rapierWorld.castRay(finishRay, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.EXIT));
+      if (finishHit != null) {
+        gameState = GameState.FINISHED;
+        splashText.textContent = "THE END";
+        splashContainer.classList.remove('hidden');
+        input.pause = false;
       }
 
       // Pause game
