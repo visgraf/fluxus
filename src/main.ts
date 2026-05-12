@@ -1076,6 +1076,8 @@ const pipesSound = new THREE.PositionalAudio(listener);
 positionalSounds.push(pipesSound);
 loadingPositionalSound(audioLoader, pipesSound, './shower_drain_edited.wav', 0.7, 1, 4, 0.4, pipes);
 
+let soundStarted = false;
+
 // ############################################################################
 // ############################ END OF SOUND BLOCK ############################
 // ############################################################################
@@ -1095,49 +1097,7 @@ const input = {
   pause: false
 };
 
-// Initializing sound, either via user click or keyboard interaction
-let soundStarted = false;
-window.addEventListener('pointerdown', () => {
-  // Initializing Cornelius sound when palyer first start playing the game by
-  // clicking and then initializing the rest
-  if (!soundStarted) {
-    cornelliusSound.onEnded = function() {
-      bgSound.play();
-      positionalSounds.forEach((sound) => {
-        sound.play();
-      });
-      barriersSounds.forEach((sound) => {
-        sound.play();
-      });
-      powerUpsSounds.forEach((sound) => {
-        sound.play();
-      });
-    };
-    cornelliusSound.play();
-    soundStarted = true;
-  }  
-}, { once: true });
-
 document.addEventListener('keydown', (event) => {
-  // Initializing Cornelius sound when palyer first start playing the game by
-  // using and the keyboard and then initializing the rest
-  if (!soundStarted) {
-    cornelliusSound.onEnded = function() {
-      bgSound.play();
-      positionalSounds.forEach((sound) => {
-        sound.play();
-      });
-      barriersSounds.forEach((sound) => {
-        sound.play();
-      });
-      powerUpsSounds.forEach((sound) => {
-        sound.play();
-      });
-    };
-    cornelliusSound.play();
-    soundStarted = true;
-  }
-  
   switch (event.code) {
     case 'KeyW':
       input.moveForward = true;
@@ -1252,6 +1212,23 @@ function animate( timestamp: DOMHighResTimeStamp ) {
         splashContainer.classList.add('hidden');
         gameState = GameState.PLAYING;
         input.pause = false;
+
+        if (!soundStarted) {
+          cornelliusSound.onEnded = function() {
+            bgSound.play();
+            positionalSounds.forEach((sound) => {
+              sound.play();
+            });
+            barriersSounds.forEach((sound) => {
+              sound.play();
+            });
+            powerUpsSounds.forEach((sound) => {
+              sound.play();
+            });
+          };
+          cornelliusSound.play();
+          soundStarted = true;
+        }
       }
       break;
 
