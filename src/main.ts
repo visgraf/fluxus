@@ -55,6 +55,12 @@ function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, r
   return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
 }
 
+const splashContainer = document.getElementById('splash_container')!;
+const splashText = document.getElementById('splash_text')!;
+
+splashText.textContent = "PRESS SPACE";
+splashContainer.classList.add('hidden');
+
 // Setup HUD
 const hintsEl = document.createElement('div');
 hintsEl.style.cssText = [
@@ -72,7 +78,7 @@ document.body.appendChild(hintsEl);
 
 // Setup stats
 const stats = new Stats();
-document.body.appendChild(stats.dom);
+//document.body.appendChild(stats.dom);
 
 // Setup renderer
 const renderer = new THREE.WebGLRenderer({ powerPreference: "high-performance" });
@@ -842,7 +848,7 @@ const rapierDebugLines = new THREE.LineSegments(
   rapierDebugGeom,
   new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false }),
 );
-rapierDebugLines.visible = true;
+rapierDebugLines.visible = false;
 scene.add(rapierDebugLines);
 
 function updateRapierDebugLines() {
@@ -1259,7 +1265,9 @@ function animate( timestamp: DOMHighResTimeStamp ) {
   rapierWorld.step();
 
   // Update colliders debug lines
-  // updateRapierDebugLines();
+  if (rapierDebugLines.visible) {
+    updateRapierDebugLines();
+  }
 
   // Update camera
   camera.position.add(playerMovement);

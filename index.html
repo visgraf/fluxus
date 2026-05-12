@@ -15,9 +15,60 @@
         overflow: hidden;
         font-family: system-ui, sans-serif;
       }
+
+      /* --- Splash Screen Container --- */
+      #splash_container {
+        position: fixed;
+        inset: 0;
+        background-color: #1E1028; /* Background color */
+        z-index: 10; /* Ensures it stays above your Three.js canvas */
+        
+        /* Smooth fade transition */
+        transition: opacity 0.3s ease-in-out; 
+        opacity: 1; 
+      }
+
+      #splash_container.hidden {
+        opacity: 0;
+        pointer-events: none; /* Lets clicks pass through to the game when hidden */
+      }
+
+      /* --- Splash Screen Image --- */
+      #splash_screen {
+        position: absolute;
+        inset: 0; 
+        margin: auto; 
+        width: 100vw;   
+        height: 100vh;  
+        object-fit: contain; 
+        pointer-events: none; 
+      }
+
+      /* --- Splash Screen Text --- */
+      #splash_text {
+        position: absolute;
+        bottom: 53%;         /* Positions it 10% up from the bottom */
+        width: 100%;
+        text-align: center;  /* Centers the text horizontally */
+        
+        /* Text styling */
+        color: white;
+        font-size: 3rem;     /* Large letters */
+        font-weight: bold;
+        letter-spacing: 0.2em;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8); /* Adds a shadow so it's readable over the image */
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
+    
+    <!-- Container wraps both image and text -->
+    <div id="splash_container">
+      <img id="splash_screen" src="/splash_screen.png" />
+      <div id="splash_text">LOADING</div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
