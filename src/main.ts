@@ -55,11 +55,21 @@ function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, r
   return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
 }
 
+// Setup groups
+enum GameState {
+  LOADING,
+  WAITING,
+  PLAYING,
+  PAUSED,
+  FINISHED
+};
+
+let gameState: GameState = GameState.LOADING;
+
+const splatPromises: Promise<SplatMesh>[] = [];
+
 const splashContainer = document.getElementById('splash_container')!;
 const splashText = document.getElementById('splash_text')!;
-
-splashText.textContent = "PRESS SPACE";
-splashContainer.classList.add('hidden');
 
 // Setup HUD
 const hintsEl = document.createElement('div');
@@ -431,6 +441,7 @@ class Transmitter {
     this.models = [];
     for (var basePhase of basePhases) {
       const model = new SplatMesh({ url: asset, lod: false });
+      splatPromises.push(model.initialized);
       model.quaternion.identity();
       model.scale.setScalar(0.14);
       model.position.set(0, -0.3, 0);
@@ -483,6 +494,7 @@ class PowerUp {
 
     if (asset != null) {
       this.model = new SplatMesh({ url: asset, lod: false });
+      splatPromises.push(this.model.initialized);
       this.model.scale.setScalar(0.05);
       this.model.position.set(0, 0.7, 0);
       this.pivot.add(this.model);
@@ -541,6 +553,7 @@ class Barrier {
     this.models = [];
     for (var basePhase of basePhases) {
       const model = new SplatMesh({ url: asset, lod: false });
+      splatPromises.push(model.initialized);
       model.quaternion.identity();
       model.scale.setScalar(1.0);
       model.position.set(0, 0, 0);
@@ -597,6 +610,7 @@ class Receiver {
     scene.add(this.pivot);
 
     this.model = new SplatMesh({ url: asset, lod: false });
+    splatPromises.push(this.model.initialized);
     this.model.scale.setScalar(0.14);
     this.model.position.set(0, 0, 0);
     this.pivot.add(this.model);
@@ -887,6 +901,7 @@ class ParallelWorld {
     this.collisionGroup = collisionGroup
 
     this.model = new SplatMesh({ url: asset, lod: false });
+    splatPromises.push(this.model.initialized);
     this.model.quaternion.identity();
     this.model.position.set(0, 0, 0);
     scene.add(this.model);
@@ -1077,6 +1092,7 @@ const input = {
   grabDrop: false,
   phaseShift: 0.0,
   twist: false,
+  pause: false
 };
 
 // Initializing sound, either via user click or keyboard interaction
@@ -1166,6 +1182,12 @@ document.addEventListener('keydown', (event) => {
         input.twist = !input.twist;
       }
       break;
+    case 'Escape':
+      event.preventDefault();
+      if (!event.repeat) {
+        input.pause = true;
+      }
+      break;
   }
 });
 
@@ -1205,237 +1227,283 @@ const MAX_DELTA_TIME = 0.1; // seconds
 function animate( timestamp: DOMHighResTimeStamp ) {
   stats.begin();
 
-  // Mapping the listener to the player position, but camera orientation so
-  // that the 3rd person POV doesn't sound weird
-  playerPivot.getWorldPosition(listener.position);
-  camera.getWorldQuaternion(listener.quaternion);
-
   // Frame delta time
   const time = timestamp * 0.001;
   const deltaTime = Math.min(time - (lastTime ?? time), MAX_DELTA_TIME);
   lastTime = time;
 
-  // Get current camera orientation
-  const cameraOrientation = new THREE.Quaternion();
-  camera.getWorldQuaternion(cameraOrientation);
+  switch (gameState) {
+    case GameState.LOADING:
+      // Wait for all splats to finish loading
+      Promise.all(splatPromises).then(() => {
+        // All splats are loaded and ready!
+        splashText.textContent = "PRESS SPACE";
+        gameState = GameState.WAITING;
+        input.grabDrop = false;
+      }).catch((error) => {
+        console.error("A splat failed to load:", error);
+        splashText.textContent = "ERROR";
+      });
+      break;
 
-  // Local space movement from inputs
-  const movementForward = +input.moveForward - +input.moveBackward;
-  const movementRight = +input.moveRight - +input.moveLeft;
-  const desiredMovement = new THREE.Vector3(movementRight, 0, -movementForward)
-  
-  // World space movement
-  desiredMovement.applyQuaternion(cameraOrientation);
-  desiredMovement.y = 0;
-  const desiredOrientation = new THREE.Quaternion();
-  if (desiredMovement.lengthSq() > 1e-8) {
-    desiredMovement.normalize();
-    desiredOrientation.setFromUnitVectors(new THREE.Vector3(0, 0, 1), desiredMovement);
-  } else {
-    desiredOrientation.copy(playerPivot.quaternion);
-  }
-
-  // Adjust movement length according to selected speed
-  desiredMovement.multiplyScalar(deltaTime * (input.sprint ? sprintSpeed : playerSpeed));
-
-  //
-  const worldRay = new RAPIER.Ray(playerBody.translation(), new RAPIER.Vector3(0, -1, 0));
-  const worldHit = rapierWorld.castRay(worldRay, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WORLD));
-  if (worldHit != null) {
-    desiredMovement.y = 1.0 - worldHit.toi;
-  }
-
-  // Compute allowed movement based on desired movement
-  playerController.computeColliderMovement(playerCollider, desiredMovement, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS);
-  const playerMovement = convertVector(playerController.computedMovement());
-
-  // Update player rigid body position
-  const playerPosition = convertVector(playerBody.translation()).add(playerMovement);
-  playerBody.setNextKinematicTranslation(playerPosition);
-
-  // Update hand position
-  const handMovement = playerPosition.clone().add(handOffset).sub(handModel.position);
-  const handDistance = handMovement.length();
-  if (handDistance > 1e-4) {
-    handMovement.multiplyScalar(Math.min(1.0, handSpeed * deltaTime / handDistance));
-    handModel.position.add(handMovement);
-    handBody.setNextKinematicTranslation(handModel.position);
-  }
-
-  // Simulate physical effects
-  rapierWorld.timestep = deltaTime;
-  rapierWorld.step();
-
-  // Update colliders debug lines
-  if (rapierDebugLines.visible) {
-    updateRapierDebugLines();
-  }
-
-  // Update camera
-  camera.position.add(playerMovement);
-
-  // Update orbit controls
-  orbitControls.target.copy(playerPosition);
-  orbitControls.update();
-  camera.updateMatrixWorld();
-
-  // Update player pivot pose
-  playerPivot.position.copy(playerPosition);
-  playerPivot.quaternion.rotateTowards(desiredOrientation, deltaTime * rotationSpeed);
-
-  // Update animation mixer
-  playerMixer?.update(deltaTime);
-
-  // DEBUG
-  if (input.grabDrop) {
-    console.log(playerPosition);
-  }
-
-  // Update grab and drop actions
-  if (heldTransmitter == null) {
-    const ray = new RAPIER.Ray(playerPosition, new RAPIER.Vector3(0, -1, 0));
-    const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, currentWorld.collisionGroup));
-    if (hit != null) {
-      handModel.visible = true;
-      const transmitterBody = hit.collider.parent();
-      if (transmitterBody != null) {
-        const transmitter = transmitterBody.userData as Transmitter;
-        handModel.position.copy(transmitter.getTip());
-        if (input.grabDrop) {
-          heldTransmitter = transmitter;
-          handBody.setTranslation(handModel.position, true);
-          const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, transmitter.tipOffset);
-          handJoint = rapierWorld.createImpulseJoint(jointData, handBody, transmitterBody, true);
-        }
+    case GameState.WAITING:
+      if (input.grabDrop) {
+        input.grabDrop = false;
+        splashContainer.classList.add('hidden');
+        gameState = GameState.PLAYING;
+        input.pause = false;
       }
-    } else {
-      handModel.visible = false;
-    }
-  } else {
-    heldTransmitter.body.wakeUp();
-    if (input.grabDrop) {
-      heldTransmitter = null;
-      handModel.visible = false;
-      if (handJoint != null) {
-        rapierWorld.removeImpulseJoint(handJoint, true);
-        handJoint = null;
+      break;
+
+    case GameState.PAUSED:
+      if (input.pause) {
+        input.pause = false;
+        gameState = GameState.PLAYING;
+        splashContainer.classList.add('hidden');
       }
-    }
-  }
-  input.grabDrop = false;
+      break;
 
-  // Update splat effect
-  const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight));
-  referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
-  referencePos.value.copy(playerPosition);
-  twisting.value = Number(input.twist);
-  cameraPos.value.copy(camera.position);
+    case GameState.FINISHED:
+      break;
 
-  //
-  if (input.phaseShift != 0) {
-    handModel.visible = false;
-  }
-  let newPhase = phase.value + deltaTime * input.phaseShift;
-  if ((phase.value < -1.0 && -1.0 <= newPhase) || (newPhase <= -1.0 && -1.0 < phase.value)) {
-    currentWorld = worldBlue;
-    phase.value = 2.0;
-    input.phaseShift = 0;
-  } else if ((phase.value < 0.0 && 0.0 <= newPhase) || (newPhase <= 0.0 && 0.0 < phase.value)) {
-    currentWorld = worldRed;
-    phase.value = 0.0;
-    input.phaseShift = 0;
-  } else if ((phase.value < 1.0 && 1.0 <= newPhase) || (newPhase <= 1.0 && 1.0 < phase.value)) {
-    currentWorld = worldGreen;
-    phase.value = 1.0;
-    input.phaseShift = 0;
-  } else if ((phase.value < 2.0 && 2.0 <= newPhase) || (newPhase <= 2.0 && 2.0 < phase.value)) {
-    currentWorld = worldBlue;
-    phase.value = 2.0;
-    input.phaseShift = 0;
-  } else if ((phase.value < 3.0 && 3.0 <= newPhase) || (newPhase <= 3.0 && 3.0 < phase.value)) {
-    currentWorld = worldRed;
-    phase.value = 0.0;
-    input.phaseShift = 0;
-  } else {
-    phase.value = newPhase;
-  }
+    case GameState.PLAYING:
+      // Mapping the listener to the player position, but camera orientation so
+      // that the 3rd person POV doesn't sound weird
+      playerPivot.getWorldPosition(listener.position);
+      camera.getWorldQuaternion(listener.quaternion);
 
-  worldRed.model.updateVersion();
-  worldGreen.model.updateVersion();
-  worldBlue.model.updateVersion();
+      // Get current camera orientation
+      const cameraOrientation = new THREE.Quaternion();
+      camera.getWorldQuaternion(cameraOrientation);
 
-  // Check power up acquisition
-  for (var powerUp of powerUps) {
-    const ray = new RAPIER.Ray(powerUp.pivot.position, new RAPIER.Vector3(0, 1, 0));
-    const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.PLAYER));
-    if (hit != null) {
-      powerUp.pickup();
-
-      // Deactivating power up asset sound when picking it up and playing
-      // appropriate cornellius sounds
-      if (powerUpsSounds[powerUp.index].isPlaying) {
-        powerUpsSounds[powerUp.index].pause();
-
-        if (powerUp.index == 0) {
-          cornelliusPowerUp1Sound.play();
-        }
-        else {
-          cornelliusPowerUp2Sound.play();
-        }
+      // Local space movement from inputs
+      const movementForward = +input.moveForward - +input.moveBackward;
+      const movementRight = +input.moveRight - +input.moveLeft;
+      const desiredMovement = new THREE.Vector3(movementRight, 0, -movementForward)
+      
+      // World space movement
+      desiredMovement.applyQuaternion(cameraOrientation);
+      desiredMovement.y = 0;
+      const desiredOrientation = new THREE.Quaternion();
+      if (desiredMovement.lengthSq() > 1e-8) {
+        desiredMovement.normalize();
+        desiredOrientation.setFromUnitVectors(new THREE.Vector3(0, 0, 1), desiredMovement);
+      } else {
+        desiredOrientation.copy(playerPivot.quaternion);
       }
-    }
-  }
 
-  // Update transmitter poses
-  for (var transmitter of transmitters) {
-    transmitter.updatePose();
-  }
+      // Adjust movement length according to selected speed
+      desiredMovement.multiplyScalar(deltaTime * (input.sprint ? sprintSpeed : playerSpeed));
 
-  //
-  const transmittersToPlay = new Set();
-  for (var receiver of receivers) {
-    receiver.clearBeams();
-    const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
-    if (receiverPosition != null) {
-      const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
-      const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE + CollisionGroup.BARRIER));
-      if (hit != null) {
-        const transmitterBody = hit.collider.parent();
-        if (transmitterBody != null) {
-          if (transmitterBody.userData != null) {
+      //
+      const worldRay = new RAPIER.Ray(playerBody.translation(), new RAPIER.Vector3(0, -1, 0));
+      const worldHit = rapierWorld.castRay(worldRay, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WORLD));
+      if (worldHit != null) {
+        desiredMovement.y = 1.0 - worldHit.toi;
+      }
+
+      // Compute allowed movement based on desired movement
+      playerController.computeColliderMovement(playerCollider, desiredMovement, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS);
+      const playerMovement = convertVector(playerController.computedMovement());
+
+      // Update player rigid body position
+      const playerPosition = convertVector(playerBody.translation()).add(playerMovement);
+      playerBody.setNextKinematicTranslation(playerPosition);
+
+      // Update hand position
+      const handMovement = playerPosition.clone().add(handOffset).sub(handModel.position);
+      const handDistance = handMovement.length();
+      if (handDistance > 1e-4) {
+        handMovement.multiplyScalar(Math.min(1.0, handSpeed * deltaTime / handDistance));
+        handModel.position.add(handMovement);
+        handBody.setNextKinematicTranslation(handModel.position);
+      }
+
+      // Simulate physical effects
+      rapierWorld.timestep = deltaTime;
+      rapierWorld.step();
+
+      // Update colliders debug lines
+      if (rapierDebugLines.visible) {
+        updateRapierDebugLines();
+      }
+
+      // Update camera
+      camera.position.add(playerMovement);
+
+      // Update orbit controls
+      orbitControls.target.copy(playerPosition);
+      orbitControls.update();
+      camera.updateMatrixWorld();
+
+      // Update player pivot pose
+      playerPivot.position.copy(playerPosition);
+      playerPivot.quaternion.rotateTowards(desiredOrientation, deltaTime * rotationSpeed);
+
+      // Update animation mixer
+      playerMixer?.update(deltaTime);
+
+      // DEBUG
+      if (input.grabDrop) {
+        console.log(playerPosition);
+      }
+
+      // Update grab and drop actions
+      if (heldTransmitter == null) {
+        const ray = new RAPIER.Ray(playerPosition, new RAPIER.Vector3(0, -1, 0));
+        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, currentWorld.collisionGroup));
+        if (hit != null) {
+          handModel.visible = true;
+          const transmitterBody = hit.collider.parent();
+          if (transmitterBody != null) {
             const transmitter = transmitterBody.userData as Transmitter;
-            for (var basePhase of transmitter.basePhases) {
-              const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
-              if (transmitterPosition != null) {
-                receiver.addBeam(transmitterPosition, receiverPosition);
-                transmittersToPlay.add(transmitter.index);
+            handModel.position.copy(transmitter.getTip());
+            if (input.grabDrop) {
+              heldTransmitter = transmitter;
+              handBody.setTranslation(handModel.position, true);
+              const jointData = RAPIER.JointData.spherical({ x: 0.0, y: 0.0, z: 0.0 }, transmitter.tipOffset);
+              handJoint = rapierWorld.createImpulseJoint(jointData, handBody, transmitterBody, true);
+            }
+          }
+        } else {
+          handModel.visible = false;
+        }
+      } else {
+        heldTransmitter.body.wakeUp();
+        if (input.grabDrop) {
+          heldTransmitter = null;
+          handModel.visible = false;
+          if (handJoint != null) {
+            rapierWorld.removeImpulseJoint(handJoint, true);
+            handJoint = null;
+          }
+        }
+      }
+      input.grabDrop = false;
+
+      // Update splat effect
+      const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight));
+      referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
+      referencePos.value.copy(playerPosition);
+      twisting.value = Number(input.twist);
+      cameraPos.value.copy(camera.position);
+
+      //
+      if (input.phaseShift != 0) {
+        handModel.visible = false;
+      }
+      let newPhase = phase.value + deltaTime * input.phaseShift;
+      if ((phase.value < -1.0 && -1.0 <= newPhase) || (newPhase <= -1.0 && -1.0 < phase.value)) {
+        currentWorld = worldBlue;
+        phase.value = 2.0;
+        input.phaseShift = 0;
+      } else if ((phase.value < 0.0 && 0.0 <= newPhase) || (newPhase <= 0.0 && 0.0 < phase.value)) {
+        currentWorld = worldRed;
+        phase.value = 0.0;
+        input.phaseShift = 0;
+      } else if ((phase.value < 1.0 && 1.0 <= newPhase) || (newPhase <= 1.0 && 1.0 < phase.value)) {
+        currentWorld = worldGreen;
+        phase.value = 1.0;
+        input.phaseShift = 0;
+      } else if ((phase.value < 2.0 && 2.0 <= newPhase) || (newPhase <= 2.0 && 2.0 < phase.value)) {
+        currentWorld = worldBlue;
+        phase.value = 2.0;
+        input.phaseShift = 0;
+      } else if ((phase.value < 3.0 && 3.0 <= newPhase) || (newPhase <= 3.0 && 3.0 < phase.value)) {
+        currentWorld = worldRed;
+        phase.value = 0.0;
+        input.phaseShift = 0;
+      } else {
+        phase.value = newPhase;
+      }
+
+      worldRed.model.updateVersion();
+      worldGreen.model.updateVersion();
+      worldBlue.model.updateVersion();
+
+      // Check power up acquisition
+      for (var powerUp of powerUps) {
+        const ray = new RAPIER.Ray(powerUp.pivot.position, new RAPIER.Vector3(0, 1, 0));
+        const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.PLAYER));
+        if (hit != null) {
+          powerUp.pickup();
+
+          // Deactivating power up asset sound when picking it up and playing
+          // appropriate cornellius sounds
+          if (powerUpsSounds[powerUp.index].isPlaying) {
+            powerUpsSounds[powerUp.index].pause();
+
+            if (powerUp.index == 0) {
+              cornelliusPowerUp1Sound.play();
+            }
+            else {
+              cornelliusPowerUp2Sound.play();
+            }
+          }
+        }
+      }
+
+      // Update transmitter poses
+      for (var transmitter of transmitters) {
+        transmitter.updatePose();
+      }
+
+      //
+      const transmittersToPlay = new Set();
+      for (var receiver of receivers) {
+        receiver.clearBeams();
+        const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
+        if (receiverPosition != null) {
+          const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
+          const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.ALL, CollisionGroup.WHITE + CollisionGroup.BARRIER));
+          if (hit != null) {
+            const transmitterBody = hit.collider.parent();
+            if (transmitterBody != null) {
+              if (transmitterBody.userData != null) {
+                const transmitter = transmitterBody.userData as Transmitter;
+                for (var basePhase of transmitter.basePhases) {
+                  const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
+                  if (transmitterPosition != null) {
+                    receiver.addBeam(transmitterPosition, receiverPosition);
+                    transmittersToPlay.add(transmitter.index);
+                  }
+                }
               }
             }
           }
         }
       }
-    }
+
+      // Checking transmitters affecting (or affected by) receivers to play their
+      // sound (and pause others).
+      transmittersSounds.forEach((ts, index) => {
+        if (transmittersToPlay.has(index)) {
+          if (!ts.isPlaying) {
+            ts.play();
+          }
+        }
+        else {
+          if (ts.isPlaying) {
+            ts.pause();
+          }
+        }
+      });
+
+      for (var barrier of barriers) {
+        barrier.updateState(barriersSounds, soundStarted);
+      }
+
+      // Pause game
+      if (input.pause) {
+        input.pause = false;
+        gameState = GameState.PAUSED;
+        splashText.textContent = "PAUSED";
+        splashContainer.classList.remove('hidden');
+      }
+
+      break;
   }
 
-  // Checking transmitters affecting (or affected by) receivers to play their
-  // sound (and pause others).
-  transmittersSounds.forEach((ts, index) => {
-    if (transmittersToPlay.has(index)) {
-      if (!ts.isPlaying) {
-        ts.play();
-      }
-    }
-    else {
-      if (ts.isPlaying) {
-        ts.pause();
-      }
-    }
-  });
-
-  for (var barrier of barriers) {
-    barrier.updateState(barriersSounds, soundStarted);
-  }
-  
   // Render scene
   composer.render(deltaTime);
   
