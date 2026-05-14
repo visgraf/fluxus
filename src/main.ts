@@ -21,38 +21,42 @@ function convertVector(v: RAPIER.Vector): THREE.Vector3 {
   return new THREE.Quaternion(x, y, z, w);
 }*/
 
-function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, referenceOrientation: THREE.Quaternion, phase: number, twisting: number): THREE.Vector3 | null {
+function computeDroste(point: THREE.Vector3, referencePosition: THREE.Vector3, referenceOrientation: THREE.Quaternion, phase: number, twisting: number, portalAnimation: number): THREE.Vector3 | null {
+  // --- Portal animation variables ---
+  const portalOpening = THREE.MathUtils.clamp(portalAnimation, 1e-5, 1.0);
+  const portalRipple = THREE.MathUtils.clamp(Math.abs(portalAnimation), 0.0, 1.0);
+  // --- Local Space ---
   const inverseQuaternion = referenceOrientation.clone().invert();
   const localPoint = point.clone().sub(referencePosition).applyQuaternion(inverseQuaternion);
-  const dist = localPoint.length();
+  const pointDistance = localPoint.length();
   const ray = localPoint.clone().normalize();
   // --- Log-Polar Coordinates in the Riemann Sphere ---
   const theta = Math.atan2(ray.y, ray.x);
   const rho = Math.atanh(ray.z);
   // --- Periodic Annulus ---
-  const lowerZ = -0.8;
-  const upperZ = 0.8;
-  const lowerRho = Math.atanh(lowerZ);
-  const upperRho = Math.atanh(upperZ);
-  const period = upperRho - lowerRho;
+  const period = 2.0 * Math.atanh(1.0 - 0.2 * portalOpening);
   // --- Process Annulus Edges ---
-  if ((rho < lowerRho) || (upperRho < rho)) {
-    return null;
-  }
+  if ((rho < -0.5 * period) || (0.5 * period < rho)) return null;
   // --- Phase Shift ---
   const shiftedRho = rho + period * phase;
-  const periodicRho = (((((shiftedRho - lowerRho + period) / period) % 3) + 3) % 3) * period + lowerRho - period;
+  const periodicRho = THREE.MathUtils.euclideanModulo((shiftedRho + 1.5 * period) / period, 3) * period - 1.5 * period;
   // --- Log-Polar Rotation and Scale (Twisting) ---
   const ratio = twisting * period / (2.0 * Math.PI);
   const factor = 1.0 / (1.0 + ratio * ratio);
   const newRho = (periodicRho + theta * ratio) * factor;
   const newTheta = (theta - periodicRho * ratio) * factor;
+  // --- Alternate worlds depends on portal opening ---
+  //if ((newRho < -0.5 * period) || (0.5 * period < newRho)) return null;
   // --- New Ray ---
   const newZ = Math.tanh(newRho);
   const newPhi = Math.asin(newZ);
   const newRay = new THREE.Vector3(Math.cos(newTheta) * Math.cos(newPhi), Math.sin(newTheta) * Math.cos(newPhi), newZ);
+  // --- Radial Effects ---
+  const portalPushback = THREE.MathUtils.lerp(1.0, Math.cosh(newRho), portalOpening);
+  const waveCoord = Math.abs(newPhi) - Math.asin(portalRipple);
+  const waveValue = Math.pow(portalRipple, 3.0) * Math.exp(-1000.0 * waveCoord * waveCoord);
   // -- New Point ---
-  return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(dist * Math.cosh(newRho)).add(referencePosition);
+  return newRay.clone().applyQuaternion(referenceOrientation).multiplyScalar(pointDistance * portalPushback - waveValue).add(referencePosition);
 }
 
 // Setup game states
@@ -95,8 +99,7 @@ enum CollisionGroup {
   TRIGGER_BLUE = triggerGroup([2]),
   TRIGGER_WHITE = triggerGroup([0, 1, 2]),
   DETECTOR = 1 << 9,
-  WORLD = 1 << 10,
-  BARRIER = 1 << 11
+  WORLD = 1 << 10
 };
 
 let gameState: GameState = GameState.LOADING;
@@ -150,7 +153,7 @@ directionalLight.target.position.set(0, 0, 0);
 const playerRadius = 0.1;
 const playerSpeed = 1.5;
 const sprintSpeed = 3.0;
-const rotationSpeed = 6.0;
+const rotationSpeed = 7.0;
 const spawnPosition = new THREE.Vector3(0, 1, 0);
 const playerPivot = new THREE.Group();
 scene.add(playerPivot);
@@ -180,9 +183,9 @@ new GLTFLoader().load(
 );
 
 // Setup camera
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.001, 1000);
 camera.position.copy(spawnPosition);
-camera.position.z += playerRadius * 8;
+camera.position.z += 1.0;
 
 // Setup post-processing
 const brightnessContrastEffect = new BrightnessContrastEffect({ brightness: -0.16, contrast: 0.16 });
@@ -210,10 +213,10 @@ window.addEventListener("resize", handleResize);
 const orbitControls = new OrbitControls(camera, renderer.domElement);
 orbitControls.enableDamping = true;
 orbitControls.enablePan = false;
-orbitControls.minDistance = playerRadius * 2;
-orbitControls.maxDistance = playerRadius * 30;
-orbitControls.minPolarAngle = 1e-3;
-orbitControls.maxPolarAngle = Math.PI - 1e-3;
+orbitControls.minDistance = 0.03;
+orbitControls.maxDistance = 3.0;
+orbitControls.minPolarAngle = 0.01
+orbitControls.maxPolarAngle = Math.PI - 0.01;
 orbitControls.target.copy(spawnPosition);
 
 // Setup Rapier world
@@ -261,7 +264,7 @@ playerBodyDesc.setTranslation(spawnPosition.x, spawnPosition.y, spawnPosition.z)
 const playerBody = rapierWorld.createRigidBody(playerBodyDesc);
 
 const playerColliderDesc = RAPIER.ColliderDesc.ball(playerRadius);
-playerColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.PHYSICAL_RED, CollisionGroup.PHYSICAL_RED + CollisionGroup.WORLD + CollisionGroup.BARRIER));
+playerColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.PHYSICAL_RED, CollisionGroup.PHYSICAL_RED + CollisionGroup.WORLD));
 const playerCollider = rapierWorld.createCollider(playerColliderDesc, playerBody);
 
 const playerOffset = 0.01;
@@ -363,7 +366,11 @@ const referencePos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
 const referenceQuat = dyno.dynoVec4(new THREE.Vector4(1, 0, 0, 0));
 const phase = dyno.dynoFloat(0.0);
 const twisting = dyno.dynoFloat(0.0);
+const portalAnimation = dyno.dynoFloat(-1.0);
 const cameraPos = dyno.dynoVec3(new THREE.Vector3(0, 0, 0));
+
+const initialSpin = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3(0, 1, 0), 2.0);
+referenceQuat.value.copy(portalOrientation.premultiply(initialSpin));
 
 function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Vector4(1, 1, 1, 1), flipColor: number = 0.0) {
   return dyno.dynoBlock(
@@ -371,7 +378,10 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Ve
     { gsplat: dyno.Gsplat },
     ({ gsplat }) => {
       const d = new dyno.Dyno({
-        inTypes: { gsplat: dyno.Gsplat, referencePos: "vec3", referenceQuat: "vec4", rgba: "vec4", flipColor: "float", phase: "float", twisting: "float", cameraPos: "vec3" },
+        inTypes: { gsplat: dyno.Gsplat,
+          referencePos: "vec3", referenceQuat: "vec4",
+          phase: "float", twisting: "float", portalAnimation: "float",
+          cameraPos: "vec3", rgba: "vec4", flipColor: "float" },
         outTypes: { gsplat: dyno.Gsplat },
         globals: () => [dyno.unindent(`
           vec3 rotatePos(vec4 rot, vec3 pos) {
@@ -390,34 +400,38 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Ve
           ${outputs.gsplat} = ${inputs.gsplat};
           ${outputs.gsplat}.rgba = mix(${outputs.gsplat}.rgba, ${outputs.gsplat}.rgba.bgra, ${inputs.flipColor});
           ${outputs.gsplat}.rgba *= ${inputs.rgba};
+          // --- Portal animation variables ---
+          float portalOpening = clamp(${inputs.portalAnimation}, 1e-5, 1.0);
+          float portalRipple = clamp(1.0 - abs(${inputs.portalAnimation}), 0.0, 1.0);
+          // --- Local Space ---
           vec4 inverseRot = ${inputs.referenceQuat} * vec4(1.0, 1.0, 1.0, -1.0);
           vec3 splatPos = rotatePos(inverseRot, ${inputs.gsplat}.center - ${inputs.referencePos});
+          float splatDistance = length(splatPos);
           vec3 splatRay = normalize(splatPos);
           // --- Log-Polar Coordinates in the Riemann Sphere ---
           float theta = atan(splatRay.y, splatRay.x);
           float phi = asin(splatRay.z);
           float rho = atanh(splatRay.z);
           // --- Periodic Annulus ---
-          float lowerZ = -0.8;
-          float upperZ = 0.8;
-          float lowerRho = atanh(lowerZ);
-          float upperRho = atanh(upperZ);
-          float period = upperRho - lowerRho;
+          float period = 2.0 * atanh(1.0 - 0.2 * portalOpening);
           // --- Process Annulus Edges ---
-          float inside = step(lowerRho, rho) * step(rho, upperRho);
+          float inside = step(-0.5 * period, rho) * step(rho, 0.5 * period);
           ${outputs.gsplat}.rgba.a *= inside;
           float edgeThickness = 0.05;
-          float edge = step(rho, lowerRho + edgeThickness * 0.5) + step(upperRho - edgeThickness * 0.5, rho);
+          float edge = step(rho, -0.5 * period + edgeThickness * 0.5) + step(0.5 * period - edgeThickness * 0.5, rho);
           vec3 edgeColor = vec3(0.9, 0.7, 0.4);
           ${outputs.gsplat}.rgba.rgb = mix(${outputs.gsplat}.rgba.rgb, edgeColor, edge);
           // --- Phase Shift ---
           rho += period * ${inputs.phase};
-          rho = mod((rho - lowerRho + period) / period, 3.0) * period + lowerRho - period;
+          rho = mod((rho + 1.5 * period) / period, 3.0) * period - 1.5 * period;
           // --- Log-Polar Rotation and Scale (Twisting) ---
           float ratio = ${inputs.twisting} * period / (2.0 * PI);
           float factor = 1.0 / (1.0 + ratio * ratio);
           float newRho = (rho + theta * ratio) * factor;
           float newTheta = (theta - rho * ratio) * factor;
+          // --- Alternate worlds depends on portal opening ---
+          inside = step(-0.5 * period, rho) * step(rho, 0.5 * period);
+          ${outputs.gsplat}.rgba.a *= mix(inside, 1.0, portalOpening);
           // --- New Ray ---
           float newZ = tanh(newRho);
           float newPhi = asin(newZ);
@@ -426,8 +440,12 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Ve
           vec3 crossRays = cross(splatRay, newRay);
           float dotRays = dot(splatRay, newRay);
           vec4 rotationQuat = normalize(vec4(crossRays, 1.0 + dotRays));
+          // --- Radial Effects ---
+          float portalPushback = mix(1.0, cosh(newRho), portalOpening);
+          float waveCoord = abs(newPhi) - asin(portalRipple);
+          float waveValue = pow(portalRipple, 3.0) * exp(-1000.0 * waveCoord * waveCoord);
           // --- Rotate Splat Position and Orientation ---
-          ${outputs.gsplat}.center = rotatePos(${inputs.referenceQuat}, rotatePos(rotationQuat, splatPos)) * cosh(newRho) + ${inputs.referencePos};
+          ${outputs.gsplat}.center = (splatDistance * portalPushback - waveValue) * rotatePos(${inputs.referenceQuat}, newRay) + ${inputs.referencePos};
           ${outputs.gsplat}.quaternion = rotateQuat(${inputs.referenceQuat}, rotateQuat(rotationQuat, rotateQuat(inverseRot, ${inputs.gsplat}.quaternion)));
           // --- Cut a cone of player->camera occlusion ---
           vec3 finalVec = normalize(${outputs.gsplat}.center - ${inputs.referencePos});
@@ -440,11 +458,12 @@ function createSplatEffect(basePhase: number, rgba: THREE.Vector4 = new THREE.Ve
         gsplat,
         referencePos: referencePos,
         referenceQuat: referenceQuat,
-        rgba: dyno.dynoConst("vec4", rgba),
-        flipColor: dyno.dynoConst("float", flipColor),
         phase: dyno.sub(phase, dyno.dynoConst("float", basePhase)),
         twisting: twisting,
+        portalAnimation: portalAnimation,
         cameraPos: cameraPos,
+        rgba: dyno.dynoConst("vec4", rgba),
+        flipColor: dyno.dynoConst("float", flipColor),
       }).gsplat;
 
       return { gsplat };
@@ -494,7 +513,7 @@ class Transmitter {
     this.body = rapierWorld.createRigidBody(rigidBodyDesc);
 
     const colliderDesc = RAPIER.ColliderDesc.cone(height/2, radius);
-    colliderDesc.setCollisionGroups(createGroupMask(physicalGroup(this.basePhases), physicalGroup(this.basePhases) + CollisionGroup.WORLD + CollisionGroup.BARRIER));
+    colliderDesc.setCollisionGroups(createGroupMask(physicalGroup(this.basePhases), physicalGroup(this.basePhases) + CollisionGroup.WORLD));
     this.collider = rapierWorld.createCollider(colliderDesc, this.body);
 
     const handleColliderDesc = RAPIER.ColliderDesc.ball(0.5);
@@ -553,6 +572,10 @@ class PowerUp {
   static instances: PowerUp[] = [];
   index: number;
 
+  static hasPortal: boolean = false;
+  static hasSpin: boolean = false;
+  static hasTwist: boolean = false;
+
   pivot: THREE.Group;
   triggerCollider: RAPIER.Collider;
   body: RAPIER.RigidBody;
@@ -560,7 +583,7 @@ class PowerUp {
   basePhases: number[];
   gone: boolean;
 
-  constructor(basePhases: number[], radius: number, x:number, y: number, z: number) {
+  constructor(basePhases: number[], radius: number, angle: number, x:number, y: number, z: number) {
     this.index = PowerUp.instances.length;
     PowerUp.instances.push(this);
 
@@ -586,9 +609,9 @@ class PowerUp {
       const model = new SplatMesh({ url: asset, lod: false });
       splatPromises.push(model.initialized);
 
-      model.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+      model.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
       model.scale.setScalar(0.05);
-      model.position.set(0, 0.7, 0);
+      model.position.set(0, 0.8, 0);
 
       model.worldModifier = createSplatEffect(basePhase);
       model.updateGenerator();
@@ -622,7 +645,7 @@ const { positions, indices } = mergeTrimesh(barrierGLTF.scene);
 const barrierVerts = new Float32Array(positions);
 const barrierIdx = new Uint32Array(indices);
 const barrierColliderDesc = RAPIER.ColliderDesc.trimesh(barrierVerts, barrierIdx);
-barrierColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.BARRIER, CollisionGroup.PHYSICAL_WHITE + CollisionGroup.DETECTOR));
+barrierColliderDesc.setCollisionGroups(createGroupMask(CollisionGroup.PHYSICAL_WHITE, CollisionGroup.PHYSICAL_WHITE));
 
 class Barrier {
   static instances: Barrier[] = [];
@@ -809,118 +832,181 @@ let currentWorld: ParallelWorld = worldRed;
 // ############################################################################
 
 // Portal Power
-new PowerUp( [0], 0.5,
-  1.199181079864502, 0.0, 5.378575801849365
+new PowerUp( [0], 0.3, -Math.PI/2,
+  4.4, 0.0, 6.4
 );
 
 // Spin Power
-new PowerUp( [1], 0.5,
-  8.152009963989258, 0.6, -3.9080374240875244
+new PowerUp( [1], 0.3, Math.PI/3,
+  8.2, 0.7, -3.9
 );
 
 // Twist Power
-new PowerUp( [2], 0.5,
-  -6.243780136108398, 0.0, 4.507924556732178
+new PowerUp( [2], 0.3, -Math.PI/4,
+  -6.2, 0.0, 4.5
 );
 
 // Escape
-const escapeTrigger = new PowerUp( [0, 1, 2], 1.0,
-  -11.977856636047363, 0.0, 6.6700358390808105
+const escapeTrigger = new PowerUp( [0, 1, 2], 1.0, 0,
+  -12.0, 0.0, 6.6
 );
 
 
 // Lab
+
 const labBarrier = new Barrier( [0, 1, 2],
-  1.4075300693511963, 0.4, 1.555212140083313 );
+  1.6, 0.8, 1.7
+);
 
 new Receiver( 0, labBarrier,
-  0.75, 1.3, 1.15
+  0.7, 1.5, 1.2
 );
 
 new Transmitter( [0],
-  -0.05643090978264809, 0.5, -2.157003402709961
+  0.0, 0.5, -2.1
 );
 
 new Transmitter( [1],
-  0.9295482039451599, 0.5, -2.4102461338043213,
+  0.9, 0.5, -2.4
 );
 
-//Hall
-
-
-
-//Toylet
-const toyletBarrier1 = new Barrier( [0, 1, 2],
-  7.624645709991455, 0.4, 8.343265533447266,
-);
-
-new Transmitter( [2],
-  7.624645709991455, 0.5, 8.343265533447266,
-);
-
-new Receiver( 0, toyletBarrier1,
-  8.224555015563965, 1.3, 9.010746002197266,
-);
-
-const toyletBarrier2 = new Barrier( [0, 1, 2],
-  7.330603122711182, 0.4, 10.619728088378906,
-);
-
-new Transmitter( [0],
-  7.330603122711182, 0.5, 10.619728088378906,
-);
-
-new Receiver( 0, toyletBarrier2,
-  6.821481704711914, 1.3, 10.005276679992676,
-);
-
-new Receiver(0, toyletBarrier2,
-  8.094793319702148, 1.3, 10.4473237991333,
-);
-
-//Bedroom
-new Transmitter( [2],
-  9.396486282348633, 1.1, 1.5349745750427246,
-);
-
-
-
-const bedroomBarrier1 = new Barrier( [0, 1, 2],
-  11.234466552734375, 1.0, -0.992029070854187,
-);
-
-new Transmitter( [0, 1, 2],
-  11.234466552734375, 1.1, -0.992029070854187,
-);
-
-new Receiver( 0, bedroomBarrier1,
-  10.382755279541016, 1.9, -0.7960900068283081,
-);
-
-
-
-
-
-const bedroomBarrier2 = new Barrier( [0, 1, 2],
-  9.610899925231934, 1.0, -3.3680872917175293,
-);
-
-new Receiver( 0, bedroomBarrier2,
-  10.46142578125, 1.9, -2.8999879360198975,
-);
-
-
-
+// Bedroom
 
 const bedroomBarrier3 = new Barrier( [0, 1, 2],
-  8.152009963989258, 1.0, -3.9080374240875244,
+  8.2, 1.5, -3.9
 );
 
 new Receiver( 0, bedroomBarrier3,
-  9.610899925231934, 1.9, -3.3680872917175293,
+  9.7, 2.2, -3.3
 );
 
-//Kitchen
+const bedroomBarrier2 = new Barrier( [0, 1, 2],
+  9.7, 1.5, -3.3
+);
+
+new Receiver( 0, bedroomBarrier2,
+  10.7, 2.2, -2.8
+);
+
+new Transmitter( [0], //[0, 1, 2], <--- This used to be the synchronized transmitter
+  11.2, 1.2, -1.0
+);
+
+const bedroomBarrier1 = new Barrier( [0, 1, 2],
+  11.2, 1.5, -1.0
+);
+
+new Receiver( 0, bedroomBarrier1,
+  10.4, 2.2, -0.8
+);
+
+new Transmitter( [2],
+  9.4, 1.2, 1.5
+);
+
+// Bathroom
+
+new Transmitter( [0],
+  7.3, 0.5, 10.6
+);
+
+const bathroomBarrier2 = new Barrier( [0, 1, 2],
+  7.3, 0.8, 10.6
+);
+
+new Receiver( 0, bathroomBarrier2,
+  6.5, 1.5, 10.0
+);
+
+new Receiver(0, bathroomBarrier2,
+  8.4, 1.3, 10.5
+);
+
+new Transmitter( [2],
+  7.6, 0.5, 8.3
+);
+
+const bathroomBarrier1 = new Barrier( [0, 1, 2],
+  7.6, 0.8, 8.3
+);
+
+new Receiver( 0, bathroomBarrier1,
+  8.5, 1.5, 9.0
+);
+
+new Transmitter( [1],
+  10.0, 0.5, 9.5
+);
+
+// Hall
+
+const bedroomBarrier = new Barrier( [0, 1, 2],
+  5.1, 1.3, 2.6
+);
+
+new Receiver(0, bedroomBarrier,
+  6.0, 1.5, 4.8
+);
+
+const toyletBarrier = new Barrier( [0, 1, 2],
+  6.1, 0.8, 8.8
+);
+
+new Receiver(0, toyletBarrier,
+  5.8, 1.5, 7.4
+);
+
+new Receiver(0, toyletBarrier,
+  5.2, 1.5, 8.2
+);
+
+new Receiver(0, toyletBarrier,
+  4.6, 1.5, 9.0
+);
+
+const kitchenBarrier = new Barrier( [0, 1, 2],
+  -2.3, 0.8, 6.8
+);
+
+new Receiver(0, kitchenBarrier,
+  -0.6, 1.5, 6.6
+);
+
+const hallBarrier3 = new Barrier( [0, 1, 2],
+  -0.6, 0.8, 6.6
+);
+
+new Receiver(0, hallBarrier3,
+  -1.5, 1.5, 5.7
+);
+
+new Receiver(0, hallBarrier3,
+  0.6, 1.5, 7.8
+);
+
+const hallBarrier2 = new Barrier( [0, 1, 2],
+  0.6, 0.8, 7.8
+);
+
+new Receiver(0, hallBarrier2,
+  -0.1, 1.5, 8.9
+);
+
+new Receiver(0, hallBarrier2,
+  1.6, 1.5, 6.2
+);
+
+const hallBarrier1 = new Barrier( [0, 1, 2],
+  1.6, 0.8, 6.2
+);
+
+new Receiver(0, hallBarrier1,
+  2.4, 1.5, 7.4
+);
+
+new Receiver(0, hallBarrier1,
+  0.8, 1.5, 4.9
+);
 
 // ############################################################################
 // ############################ END OF LEVEL BLOCK ############################
@@ -983,6 +1069,9 @@ loadingBackgroundSound(audioLoader, cornelliusPowerUp1Sound, './cornellius_when_
 
 const cornelliusPowerUp2Sound = new THREE.Audio(listener);
 loadingBackgroundSound(audioLoader, cornelliusPowerUp2Sound, './cornellius_when_we_get_spin.mp3', false, 0.4);
+
+const cornelliusPowerUp3Sound = new THREE.Audio(listener);
+loadingBackgroundSound(audioLoader, cornelliusPowerUp3Sound, './cornellius_when_we_get_twist.mp3', false, 0.4);
 
 const cornelliusEscapedSound = new THREE.Audio(listener);
 loadingBackgroundSound(audioLoader, cornelliusEscapedSound, './cornellius_when_we_escape.mp3', false, 0.4);
@@ -1164,6 +1253,11 @@ document.addEventListener('keyup', (event) => {
 
 
 
+let twistSpeed = 0.0;
+let autoSpin = 1.0;
+
+
+
 // Main Loop
 let lastTime: DOMHighResTimeStamp | null = null;
 const MAX_DELTA_TIME = 0.1; // seconds
@@ -1233,12 +1327,13 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       break;
 
     case GameState.PLAYING:
-      // Can't traverse a portal if holding a transmitter
-      if (heldTransmitter != null)
+      // Can't traverse portal if holding transmitter or portal is still opening
+      if ((heldTransmitter != null) || (portalAnimation.value < 1.0))
       {
         input.phaseShift = 0;
       }
-      // Can't grab a transmitter if traversing a portal
+
+      // Can't grab transmitter if traversing portal
       if (input.phaseShift != 0) {
         handModel.visible = false;
         input.grabDrop = false;
@@ -1312,6 +1407,9 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       orbitControls.target.copy(playerPosition);
       orbitControls.update();
       camera.updateMatrixWorld();
+      if (playerModel != null) {
+        playerModel.visible = orbitControls.getDistance() > 0.1;
+      }
 
       // Update player pivot pose
       playerPivot.position.copy(playerPosition);
@@ -1319,11 +1417,6 @@ function animate( timestamp: DOMHighResTimeStamp ) {
 
       // Update animation mixer
       playerMixer?.update(deltaTime);
-
-      // DEBUG
-      if (input.grabDrop) {
-        console.log(playerPosition);
-      }
 
       // Update grab and drop actions
       if (heldTransmitter == null) {
@@ -1363,12 +1456,46 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       input.grabDrop = false;
 
       // Update splat effect
-      const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight));
-      referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
       referencePos.value.copy(playerPosition);
-      //twisting.value = Number(input.twist);
-      twisting.value = 0;
       cameraPos.value.copy(camera.position);
+
+      if (PowerUp.hasPortal && (portalAnimation.value < 1.0)) {
+        portalAnimation.value += deltaTime;
+        if (portalAnimation.value > 1.0) {
+          portalAnimation.value = 1.0;
+        }
+      }
+
+      let deltaSpin = 0.0;
+      if (PowerUp.hasSpin) {
+        if (autoSpin > 0.0) {
+          deltaSpin = deltaTime;
+          autoSpin -= deltaTime;
+          if (autoSpin < 0.0) {
+            deltaSpin += autoSpin;
+            autoSpin = 0.0;
+          }
+        }
+
+        const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaTime * (+input.spinLeft - +input.spinRight) + deltaSpin * Math.PI);
+        referenceQuat.value.copy(portalOrientation.premultiply(rotationY));
+      }
+
+      twisting.value += twistSpeed;
+      if (twisting.value > 1.0) {
+        twisting.value = 1.0;
+        twistSpeed = 0.0;
+      }
+      if (twisting.value < 0.0) {
+        twisting.value = 0.0;
+        twistSpeed = 0.0;
+      }
+      if (input.toggleTwist) {
+        input.toggleTwist = false;
+        if (PowerUp.hasTwist) {
+          twistSpeed = (+(twisting.value < 0.5) * 2.0 - 1.0) * 0.02;
+        }
+      }
 
       //
       let newPhase = phase.value + deltaTime * input.phaseShift;
@@ -1395,7 +1522,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       } else {
         phase.value = newPhase;
       }
-      playerCollider.setCollisionGroups(createGroupMask(physicalGroup([currentWorld.basePhase]), physicalGroup([currentWorld.basePhase]) + CollisionGroup.WORLD + CollisionGroup.BARRIER));
+      playerCollider.setCollisionGroups(createGroupMask(physicalGroup([currentWorld.basePhase]), physicalGroup([currentWorld.basePhase]) + CollisionGroup.WORLD));
       rapierWorld.updateSceneQueries();
 
       worldRed.model.updateVersion();
@@ -1414,20 +1541,17 @@ function animate( timestamp: DOMHighResTimeStamp ) {
 
             switch (powerUp.index) {
               case 0:
-                // Portal power
-
+                PowerUp.hasPortal = true;
                 cornelliusPowerUp1Sound.play();
-
                 break;
               case 1:
-                // Spin power
-
+                PowerUp.hasSpin = true;
                 cornelliusPowerUp2Sound.play();
-
                 break;
               case 2:
-                // Twist power
-
+                input.toggleTwist = true;
+                PowerUp.hasTwist = true;
+                cornelliusPowerUp3Sound.play();
                 break;
               case 3:
                 // Escape
@@ -1453,17 +1577,17 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       const transmittersToPlay = new Set();
       for (let receiver of Receiver.instances) {
         receiver.clearBeams();
-        const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value);
+        const receiverPosition = computeDroste(receiver.getPos(), playerPosition, portalOrientation, phase.value - receiver.basePhase, twisting.value, portalAnimation.value);
         if (receiverPosition != null) {
           const ray = new RAPIER.Ray(receiver.pivot.position, new RAPIER.Vector3(0, -1, 0));
-          const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.DETECTOR, CollisionGroup.HANDLE_WHITE + CollisionGroup.BARRIER));
+          const hit = rapierWorld.castRay(ray, 10, false, undefined, createGroupMask(CollisionGroup.DETECTOR, CollisionGroup.HANDLE_WHITE));
           if (hit != null) {
-            const hitBody = hit.collider.parent();
-            if (hitBody != null) {
-              if (hitBody.userData != null) {
-                const transmitter = hitBody.userData as Transmitter;
+            const transmitterBody = hit.collider.parent();
+            if (transmitterBody != null) {
+              if (transmitterBody.userData != null) {
+                const transmitter = transmitterBody.userData as Transmitter;
                 for (let basePhase of transmitter.basePhases) {
-                  const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value);
+                  const transmitterPosition = computeDroste(transmitter.getTip(), playerPosition, portalOrientation, phase.value - basePhase, twisting.value, portalAnimation.value);
                   if (transmitterPosition != null) {
                     const beamDirection = receiverPosition.clone().sub(transmitterPosition);
                     const beamLength = beamDirection.length();
@@ -1522,3 +1646,43 @@ function animate( timestamp: DOMHighResTimeStamp ) {
 }
 
 renderer.setAnimationLoop( animate );
+
+const debugTools = {
+  teleport: (room: string) => {
+    switch (room) {
+      case "lab":
+        playerBody.setTranslation({ x : 0.0, y : 1.0, z : 0.0 }, true);
+        break;
+      case "hall":
+        playerBody.setTranslation( { x : 3.5, y : 1.0, z : 5.6 }, true);
+        break;
+      case "bedroom":
+        playerBody.setTranslation( { x : 8.7, y : 1.6, z : -0.8 }, true);
+        break;
+      case "bathroom":
+        playerBody.setTranslation( { x : 8.5, y : 1.0, z : 9.8 }, true);
+        break;
+      case "kitchen":
+        playerBody.setTranslation( { x : -6.6, y : 1.0, z : 7.0 }, true);
+        break;
+    }
+  },
+  position: () => {
+    console.log(playerBody.translation());
+  },
+  barrier: () => {
+    Barrier.instances.forEach( barrier => barrier.signalTotal = 0);
+  },
+  colliders: () => {
+    rapierDebugLines.visible = !rapierDebugLines.visible;
+  },
+  power: () => {
+    PowerUp.hasPortal = true;
+    PowerUp.hasSpin = true;
+    PowerUp.hasTwist = true;
+  },
+  reopen: () => {
+    portalAnimation.value = -2.0;
+  }
+};
+(window as any).debug = debugTools;
