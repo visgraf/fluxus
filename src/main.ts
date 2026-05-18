@@ -1722,6 +1722,43 @@ function animate( timestamp: DOMHighResTimeStamp ) {
         splashContainer.classList.remove('hidden');
       }
 
+
+
+      // ---------------------
+      // --- UPDATE SPLATS ---
+      // ---
+
+      // Receivers
+      for (let receiver of Receiver.instances) {
+        receiver.model.updateVersion();
+      }
+
+      // Transmitters
+      for (let transmitter of Transmitter.instances) {
+        for (let model of transmitter.models) {
+          model.updateVersion();
+        }
+      }
+
+      // Barriers
+      for (let barrier of Barrier.instances) {
+        for (let model of barrier.models) {
+          model.updateVersion();
+        }
+      }
+
+      // Power Ups
+      for (let powerUp of PowerUp.instances) {
+        for (let model of powerUp.models) {
+          model.updateVersion();
+        }
+      }
+
+      // Parallel Worlds
+      worldRed.model.updateVersion();
+      worldGreen.model.updateVersion();
+      worldBlue.model.updateVersion();
+
       break;
   }
 
