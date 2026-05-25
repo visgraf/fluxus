@@ -1507,6 +1507,10 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       const cameraOrientation = new THREE.Quaternion();
       camera.getWorldQuaternion(cameraOrientation);
 
+      // Get camera position relative to the player
+      const cameraRelativePosition = new THREE.Vector3().subVectors(camera.position, playerPivot.position);
+      
+
       // Local space movement from inputs
       const movementForward = +input.moveForward - +input.moveBackward;
       const movementRight = +input.moveRight - +input.moveLeft;
@@ -1585,7 +1589,7 @@ function animate( timestamp: DOMHighResTimeStamp ) {
       // ---
 
       // Update camera position
-      camera.position.add(playerMovement);
+      camera.position.copy(cameraRelativePosition.clone().add(playerPivot.position));
 
       // Update orbit controls
       orbitControls.target.copy(playerPivot.position);
